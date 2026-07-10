@@ -43,13 +43,17 @@ fi
 echo "waiting for HyperConverged operator to be available"
 oc wait "${HCO_KIND}" "${HCO_CR}" -n ${TARGET_NAMESPACE} --for condition=Available --timeout=30m
 
-echo "Enable KubeVirt RebootPolicy feature gate (interop e2e exercises reboot policy specs)."
-oc annotate "${HCO_KIND}" "${HCO_CR}" \
-  --namespace="${TARGET_NAMESPACE}" \
-  --overwrite \
-  kubevirt.kubevirt.io/jsonpatch='[
-    {"op": "add", "path": "/spec/configuration/developerConfiguration/featureGates/-", "value": "RebootPolicy"}
-  ]'
+if [ "${SKIP_REBOOT_POLICY_FG:-false}" != "true" ]; then
+  echo "Enable KubeVirt RebootPolicy feature gate (interop e2e exercises reboot policy specs)."
+  oc annotate "${HCO_KIND}" "${HCO_CR}" \
+    --namespace="${TARGET_NAMESPACE}" \
+    --overwrite \
+    kubevirt.kubevirt.io/jsonpatch='[
+      {"op": "add", "path": "/spec/configuration/developerConfiguration/featureGates/-", "value": "RebootPolicy"}
+    ]'
 
-echo "waiting for HyperConverged operator to be available (again)"
-oc wait "${HCO_KIND}" "${HCO_CR}" -n "${TARGET_NAMESPACE}" --for=condition=Available --timeout=15m
+  echo "waiting for HyperConverged operator to be available (again)"
+  oc wait "${HCO_KIND}" "${HCO_CR}" -n "${TARGET_NAMESPACE}" --for=condition=Available --timeout=15m
+else
+  echo "Skipping RebootPolicy feature gate (SKIP_REBOOT_POLICY_FG=true)."
+fi
