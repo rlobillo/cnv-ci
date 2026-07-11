@@ -43,6 +43,16 @@ fi
 echo "waiting for HyperConverged operator to be available"
 oc wait "${HCO_KIND}" "${HCO_CR}" -n ${TARGET_NAMESPACE} --for condition=Available --timeout=30m
 
+# Auto-skip RebootPolicy feature gate for CNV >= 4.23 / >= 5.0.
+if [ -n "${CNV_VERSION:-}" ]; then
+  cnv_major="${CNV_VERSION%%.*}"
+  cnv_minor="${CNV_VERSION#*.}"
+  if [ "$cnv_major" -ge 5 ] 2>/dev/null || { [ "$cnv_major" -eq 4 ] && [ "$cnv_minor" -ge 23 ]; } 2>/dev/null; then
+    echo "CNV_VERSION=${CNV_VERSION} >= 4.23: skipping RebootPolicy feature gate."
+    SKIP_REBOOT_POLICY_FG="true"
+  fi
+fi
+
 if [ "${SKIP_REBOOT_POLICY_FG:-false}" != "true" ]; then
   echo "Enable KubeVirt RebootPolicy feature gate (interop e2e exercises reboot policy specs)."
   oc annotate "${HCO_KIND}" "${HCO_CR}" \
