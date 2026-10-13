@@ -1,0 +1,146 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${TENANT_NAMESPACE}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pull-secret
+  namespace: ${TENANT_NAMESPACE}
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: ${PULL_SECRET_B64}
+---
+# infra-cluster-credentials: kubeconfig of the cluster where KubeVirt VMs run.
+# For local infra (management = infra), this is the hub cluster's own kubeconfig.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: infra-cluster-credentials
+  namespace: ${TENANT_NAMESPACE}
+type: Opaque
+data:
+  kubeconfig: ${INFRA_KUBECONFIG_B64}
+---
+# Pod-networking: no apiVIPs/ingressVIPs — API access via Route created by CAPOA.
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  name: ${CLUSTER_NAME}
+  namespace: ${TENANT_NAMESPACE}
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+      - 10.132.0.0/14
+    services:
+      cidrBlocks:
+      - 172.30.0.0/16
+  controlPlaneRef:
+    apiGroup: controlplane.cluster.x-k8s.io
+    kind: OpenshiftAssistedControlPlane
+    name: ${CLUSTER_NAME}
+  infrastructureRef:
+    apiGroup: infrastructure.cluster.x-k8s.io
+    kind: KubevirtCluster
+    name: ${CLUSTER_NAME}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtCluster
+metadata:
+  name: ${CLUSTER_NAME}
+  namespace: ${TENANT_NAMESPACE}
+spec:
+  controlPlaneServiceTemplate:
+    spec:
+      type: ClusterIP
+  infraClusterSecretRef:
+    name: infra-cluster-credentials
+    namespace: ${TENANT_NAMESPACE}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: ${CLUSTER_NAME}-controlplane
+  namespace: ${TENANT_NAMESPACE}
+spec:
+  template:
+    spec:
+      virtualMachineBootstrapCheck:
+        checkStrategy: none
+      virtualMachineTemplate:
+        metadata:
+          namespace: ${TENANT_NAMESPACE}
+        spec:
+          dataVolumeTemplates:
+          - metadata:
+              name: rootdisk
+            spec:
+              source:
+                pvc:
+                  name: rhcos-golden-${OCP_MAJOR_MINOR}
+                  namespace: ${TENANT_NAMESPACE}
+              storage:
+                accessModes:
+                - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 120Gi
+                storageClassName: ${STORAGE_CLASS}
+                volumeMode: Block
+          runStrategy: Always
+          template:
+            metadata:
+              annotations:
+                kubevirt.io/allow-pod-bridge-network-live-migration: ""
+            spec:
+              evictionStrategy: LiveMigrateIfPossible
+              domain:
+                cpu:
+                  cores: 8
+                devices:
+                  disks:
+                  - disk:
+                      bus: virtio
+                    name: rootdisk
+                  interfaces:
+                  - bridge: {}
+                    name: default
+                memory:
+                  guest: 16Gi
+              networks:
+              - name: default
+                pod: {}
+              volumes:
+              - dataVolume:
+                  name: rootdisk
+                name: rootdisk
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1alpha3
+kind: OpenshiftAssistedControlPlane
+metadata:
+  name: ${CLUSTER_NAME}
+  namespace: ${TENANT_NAMESPACE}
+spec:
+  distributionVersion: "${OCP_VERSION}"
+  replicas: 1
+  machineTemplate:
+    metadata:
+      labels:
+        cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+    infrastructureRef:
+      apiGroup: infrastructure.cluster.x-k8s.io
+      kind: KubevirtMachineTemplate
+      name: ${CLUSTER_NAME}-controlplane
+  config:
+    clusterName: ${CLUSTER_NAME}
+    baseDomain: ${BASE_DOMAIN}
+    pullSecretRef:
+      name: pull-secret
+    sshAuthorizedKey: "${SSH_AUTHORIZED_KEY}"
+  openshiftAssistedConfigSpec:
+    pullSecretRef:
+      name: pull-secret
+    sshAuthorizedKey: "${SSH_AUTHORIZED_KEY}"
