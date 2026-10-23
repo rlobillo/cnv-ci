@@ -90,6 +90,7 @@ BASE_DOMAIN=${BASE_DOMAIN:-$(oc get ingresscontroller default -n openshift-ingre
 STORAGE_CLASS=${STORAGE_CLASS:-$(oc get sc -o jsonpath='{.items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")].metadata.name}' 2>/dev/null)}
 PULL_SECRET=${PULL_SECRET:-$(oc get secret pull-secret -n openshift-config \
     -o jsonpath='{.data.\.dockerconfigjson}' | base64 -d)}
+SSH_AUTHORIZED_KEY=${SSH_AUTHORIZED_KEY:-"ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCj47ubVnxR16JU7ZfDli3N5QVBAwJBRh2xMryyjk5dtfugo5JIPGB2cyXTqEDdzuRmI+Vkb/A5duJyBRlA+9RndGGmhhMnj8and3wu5/cEb7DkF6ZJ25QV4LQx3K/i57LStUHXRTvruHOZ2nCuVXWqi7wSvz5YcvEv7O8pNF5uGmqHlShBdxQxcjurXACZ1YY0YDJDr3AJai1KF9zehVJODuSbrnOYpThVWGjFuFAnNxbtuZ8EOSougN2aYTf2qr/KFGDHtewIkzZmP6cjzKO5bN3pVbXxmb2Gces/BYHntY4MXBTUqwsmsCRC5SAz14bEP/vsLtrNhjq9vCS+BjMT"}
 
 echo "OCP_VERSION:   ${OCP_VERSION}"
 echo "BASE_DOMAIN:   ${BASE_DOMAIN}"
@@ -170,7 +171,7 @@ function wait_for_installation() {
 
         if [[ "${state}" == "finalizing" && "${finalizing_extended}" == "false" ]]; then
             echo "Cluster finalizing (operators deploying) — extending deadline by 30m"
-            deadline=$(( $(date +%s) + 1800 ))
+            deadline=$(( deadline + 1800 ))
             finalizing_extended=true
         fi
 
