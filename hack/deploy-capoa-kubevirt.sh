@@ -217,6 +217,21 @@ EOF
         -n assisted-installer \
         --for=condition=Available \
         --timeout=10m
+
+    # CAPOA bootstrap controller reads the assisted-service TLS CA from this
+    # secret. On OCP, assisted-service is exposed via a reencrypt Route: the
+    # router presents the Ingress CA cert to external clients, then re-encrypts
+    # to the pod using the Service CA. Both CAs must be trusted.
+    local ingress_ca service_ca
+    ingress_ca=$(oc get secret router-ca -n openshift-ingress-operator \
+        -o jsonpath='{.data.tls\.crt}' | base64 -d)
+    service_ca=$(oc get configmap openshift-service-ca.crt \
+        -n openshift-config-managed \
+        -o jsonpath='{.data.service-ca\.crt}')
+    oc create secret generic assisted-installer-ca \
+        -n assisted-installer \
+        --from-literal=ca.crt="${ingress_ca}"$'\n'"${service_ca}" \
+        --dry-run=client -o yaml | oc apply -f -
 }
 
 # ---------------------------------------------------------------------------

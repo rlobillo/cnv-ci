@@ -153,6 +153,7 @@ function wait_for_installation() {
     echo "Waiting for AgentClusterInstall to reach installed state"
 
     local deadline=$(( $(date +%s) + 5400 ))  # 90 min
+    local finalizing_extended=false
 
     while true; do
         local state
@@ -165,6 +166,12 @@ function wait_for_installation() {
         if [[ "${state}" == "installed" || "${state}" == "adding-hosts" ]]; then
             echo "Installation complete"
             return 0
+        fi
+
+        if [[ "${state}" == "finalizing" && "${finalizing_extended}" == "false" ]]; then
+            echo "Cluster finalizing (operators deploying) — extending deadline by 30m"
+            deadline=$(( $(date +%s) + 1800 ))
+            finalizing_extended=true
         fi
 
         if [[ "${state}" == "error" ]]; then

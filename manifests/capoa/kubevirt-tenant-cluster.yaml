@@ -125,7 +125,7 @@ metadata:
   namespace: ${TENANT_NAMESPACE}
 spec:
   distributionVersion: "${OCP_VERSION}"
-  replicas: 1
+  replicas: 3
   machineTemplate:
     metadata:
       labels:
@@ -144,3 +144,100 @@ spec:
     pullSecretRef:
       name: pull-secret
     sshAuthorizedKey: "${SSH_AUTHORIZED_KEY}"
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: ${CLUSTER_NAME}-worker
+  namespace: ${TENANT_NAMESPACE}
+spec:
+  template:
+    spec:
+      virtualMachineBootstrapCheck:
+        checkStrategy: none
+      virtualMachineTemplate:
+        metadata:
+          namespace: ${TENANT_NAMESPACE}
+        spec:
+          dataVolumeTemplates:
+          - metadata:
+              name: rootdisk
+            spec:
+              source:
+                pvc:
+                  name: rhcos-golden-${OCP_MAJOR_MINOR}
+                  namespace: ${TENANT_NAMESPACE}
+              storage:
+                accessModes:
+                - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 120Gi
+                storageClassName: ${STORAGE_CLASS}
+                volumeMode: Block
+          runStrategy: Always
+          template:
+            metadata:
+              annotations:
+                kubevirt.io/allow-pod-bridge-network-live-migration: ""
+            spec:
+              evictionStrategy: LiveMigrateIfPossible
+              domain:
+                cpu:
+                  cores: 4
+                devices:
+                  disks:
+                  - disk:
+                      bus: virtio
+                    name: rootdisk
+                  interfaces:
+                  - bridge: {}
+                    name: default
+                memory:
+                  guest: 8Gi
+              networks:
+              - name: default
+                pod: {}
+              volumes:
+              - dataVolume:
+                  name: rootdisk
+                name: rootdisk
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1alpha1
+kind: OpenshiftAssistedConfigTemplate
+metadata:
+  name: ${CLUSTER_NAME}-worker
+  namespace: ${TENANT_NAMESPACE}
+spec:
+  template:
+    spec:
+      pullSecretRef:
+        name: pull-secret
+      sshAuthorizedKey: "${SSH_AUTHORIZED_KEY}"
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineDeployment
+metadata:
+  name: ${CLUSTER_NAME}-workers
+  namespace: ${TENANT_NAMESPACE}
+spec:
+  clusterName: ${CLUSTER_NAME}
+  replicas: 3
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+  template:
+    metadata:
+      labels:
+        cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+    spec:
+      clusterName: ${CLUSTER_NAME}
+      bootstrap:
+        configRef:
+          apiGroup: bootstrap.cluster.x-k8s.io
+          kind: OpenshiftAssistedConfigTemplate
+          name: ${CLUSTER_NAME}-worker
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: KubevirtMachineTemplate
+        name: ${CLUSTER_NAME}-worker
