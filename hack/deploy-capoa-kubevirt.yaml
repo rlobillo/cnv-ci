@@ -1,0 +1,86 @@
+# Unified configuration for the CAPOA+KubeVirt standalone deployment and
+# e2e test.
+#
+# All versions and external references used by deploy-capoa-kubevirt.sh and
+# test-capoa-kubevirt.sh are
+# defined here. Each key can be overridden through a same-named environment
+# variable. This file is also passed to clusterctl (--config): keys that
+# clusterctl does not interpret are treated as variable-substitution values,
+# which is harmless.
+#
+# CAPOA is intentionally NOT installed via clusterctl: every CAPOA GitHub
+# release publishes a stale metadata.yaml (its releaseSeries only covers the
+# old 0.1 series), so "clusterctl init" fails for any newer release with
+# "invalid provider metadata: version ... does not match any release series".
+# CAPOA is instead installed with oc apply from the git manifests referenced
+# by CAPOA_REPO_REF / CAPOA_CONTROLPLANE_MANIFEST / CAPOA_BOOTSTRAP_MANIFEST.
+
+# Cluster API version. Pins both the clusterctl binary downloaded by the
+# script and the core provider installed by "clusterctl init".
+CAPI_VERSION: "v1.11.3"
+
+# CAPK (cluster-api-provider-kubevirt) version.
+CAPK_VERSION: "v0.1.9"
+
+# cert-manager version.
+CERT_MANAGER_VERSION: "v1.16.2"
+
+# assisted-service git tag for CRDs and kustomize manifests.
+ASSISTED_SERVICE_TAG: "v2.56.1"
+
+# assisted-service CRD paths, fetched from raw.githubusercontent.com/
+# openshift/assisted-service at ASSISTED_SERVICE_TAG. Required CRDs not
+# bundled in the infrastructure-operator itself.
+ASSISTED_SERVICE_CRD_PATHS: "hack/crds/hive/hive.openshift.io_clusterdeployments.yaml hack/crds/hive/hive.openshift.io_clusterimagesets.yaml hack/crds/mce/managedclusters.cluster.open-cluster-management.io.yaml"
+
+# Kustomize path for the infrastructure-operator (applied with
+# ?ref=ASSISTED_SERVICE_TAG).
+ASSISTED_SERVICE_KUSTOMIZE_PATH: "config/default"
+
+# CAPOA git ref and install manifest paths (fetched from
+# raw.githubusercontent.com/openshift-assisted/cluster-api-provider-openshift-assisted).
+CAPOA_REPO_REF: "master"
+CAPOA_CONTROLPLANE_MANIFEST: "test/e2e/manifests/capcoa/controlplane_install.yaml"
+CAPOA_BOOTSTRAP_MANIFEST: "test/e2e/manifests/capboa/bootstrap_install.yaml"
+
+# CAPOA controller images. Defaults match the upstream manifests (the sed
+# replacement is a no-op); override them to test custom builds.
+CAPOA_CTRL_IMAGE: "quay.io/edge-infrastructure/cluster-api-controlplane-provider-openshift-assisted:latest"
+CAPOA_BOOT_IMAGE: "quay.io/edge-infrastructure/cluster-api-bootstrap-provider-openshift-assisted:latest"
+
+# AgentServiceConfig manifest applied by deploy-capoa-kubevirt.sh and
+# test-capoa-kubevirt.sh (relative to the repository root).
+AGENTSERVICECONFIG_MANIFEST: "manifests/capoa/agentserviceconfig.yaml"
+
+# --- test-capoa-kubevirt.sh -------------------------------------------------
+#
+# Defaults for the tenant cluster e2e test. The hub cluster is introspected
+# at runtime for PULL_SECRET, BASE_DOMAIN, STORAGE_CLASS and OCP_VERSION
+# (the value below is only the fallback when discovery fails).
+
+# Tenant cluster name and namespace.
+CLUSTER_NAME: "capoa-kubevirt-test"
+TENANT_NAMESPACE: "capoa-kubevirt-test"
+
+# Namespace where assisted-service runs on the hub.
+ASSISTED_NAMESPACE: "assisted-installer"
+
+# Fallback OpenShift version to install when it cannot be discovered from
+# the hub (same RHCOS stream → reuse coreos-bootimages URL).
+OCP_VERSION: "4.22.17"
+
+# SSH public key injected into tenant cluster nodes (cnv-qe-jenkins).
+SSH_AUTHORIZED_KEY: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCj47ubVnxR16JU7ZfDli3N5QVBAwJBRh2xMryyjk5dtfugo5JIPGB2cyXTqEDdzuRmI+Vkb/A5duJyBRlA+9RndGGmhhMnj8and3wu5/cEb7DkF6ZJ25QV4LQx3K/i57LStUHXRTvruHOZ2nCuVXWqi7wSvz5YcvEv7O8pNF5uGmqHlShBdxQxcjurXACZ1YY0YDJDr3AJai1KF9zehVJODuSbrnOYpThVWGjFuFAnNxbtuZ8EOSougN2aYTf2qr/KFGDHtewIkzZmP6cjzKO5bN3pVbXxmb2Gces/BYHntY4MXBTUqwsmsCRC5SAz14bEP/vsLtrNhjq9vCS+BjMT"
+
+# Timeouts (minutes) for waiting on the tenant cluster installation. The
+# deadline is extended by FINALIZING_TIMEOUT_MIN once the
+# AgentClusterInstall reaches "finalizing" (operators deploying).
+INSTALL_TIMEOUT_MIN: "90"
+FINALIZING_TIMEOUT_MIN: "30"
+
+# Timeout for the openshift conformance run (currently disabled).
+CONFORMANCE_TIMEOUT: "3h"
+
+# Tenant cluster manifest, rendered with envsubst (relative to the
+# repository root).
+TENANT_CLUSTER_MANIFEST: "manifests/capoa/kubevirt-tenant-cluster.yaml"

@@ -1,3 +1,9 @@
+# AgentServiceConfig deployed by deploy-capoa-kubevirt.sh.
+# Triggers the assisted-service deployment on the hub cluster.
+#
+# enable-image-service: "false" — CAPOA handles OS image delivery for
+# KubeVirt tenant clusters (golden PVCs / ClusterImageSets), so the image
+# service is not needed.
 apiVersion: agent-install.openshift.io/v1beta1
 kind: AgentServiceConfig
 metadata:

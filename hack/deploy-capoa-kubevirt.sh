@@ -4,85 +4,78 @@
 # Runs in Prow CI without root. oc/kubectl are provided by the CI environment.
 # clusterctl is downloaded at runtime to /tmp/bin.
 #
-# Required env vars:
-#   ARTIFACT_DIR               - directory for JUnit results (set automatically by Prow)
+# All versions and external references are centralized in
+# hack/deploy-capoa-kubevirt.yaml. Every key defined there can be overridden
+# through a same-named environment variable:
+#   CAPI_VERSION, CAPK_VERSION, CERT_MANAGER_VERSION, ASSISTED_SERVICE_TAG,
+#   ASSISTED_SERVICE_CRD_PATHS, ASSISTED_SERVICE_KUSTOMIZE_PATH,
+#   CAPOA_REPO_REF, CAPOA_CONTROLPLANE_MANIFEST, CAPOA_BOOTSTRAP_MANIFEST,
+#   AGENTSERVICECONFIG_MANIFEST, CAPOA_CTRL_IMAGE, CAPOA_BOOT_IMAGE
 #
-# Optional env vars:
-#   CAPI_VERSION               - Cluster API version (default: v1.11.3)
-#   CAPK_VERSION               - CAPK version (default: v0.1.9)
-#   CERT_MANAGER_VERSION       - cert-manager version (default: v1.16.2)
-#   CAPOA_REPO_REF             - CAPOA git ref to pull manifests from (default: master)
-#   CAPOA_CTRL_IMAGE           - override CAPOA controlplane image (default: upstream latest)
-#   CAPOA_BOOT_IMAGE           - override CAPOA bootstrap image (default: upstream latest)
-#   ASSISTED_SERVICE_TAG       - assisted-service git tag for CRDs and manifests (default: v2.40.0)
-#   INFRA_OPERATOR_IMAGE       - infrastructure-operator image (default: upstream latest)
+# CAPOA is installed with oc apply from git manifests, NOT via clusterctl:
+# CAPOA releases ship a stale metadata.yaml (releaseSeries only covers the
+# old 0.1 series) that makes "clusterctl init" fail for any newer release.
+# See hack/deploy-capoa-kubevirt.yaml for details.
 
 set -euxo pipefail
 
-CAPI_VERSION=${CAPI_VERSION:-v1.11.3}
-CAPK_VERSION=${CAPK_VERSION:-v0.1.9}
-CERT_MANAGER_VERSION=${CERT_MANAGER_VERSION:-v1.16.2}
-CAPOA_REPO_REF=${CAPOA_REPO_REF:-master}
-CAPOA_RAW_BASE="https://raw.githubusercontent.com/openshift-assisted/cluster-api-provider-openshift-assisted/${CAPOA_REPO_REF}"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
+CONFIG_FILE="${SCRIPT_DIR}/deploy-capoa-kubevirt.yaml"
 
-CAPOA_CTRL_IMAGE=${CAPOA_CTRL_IMAGE:-"quay.io/edge-infrastructure/cluster-api-controlplane-provider-openshift-assisted:latest"}
-CAPOA_BOOT_IMAGE=${CAPOA_BOOT_IMAGE:-"quay.io/edge-infrastructure/cluster-api-bootstrap-provider-openshift-assisted:latest"}
+# Reads a configuration key from ${CONFIG_FILE}; an environment variable
+# with the same name takes precedence.
+function read_config() {
+    local key="$1"
+    if [ -n "${!key:-}" ]; then
+        printf '%s\n' "${!key}"
+        return
+    fi
+    sed -n "s/^${key}:[[:space:]]*//p" "${CONFIG_FILE}" | tr -d "\"'" | head -n1
+}
 
+CAPI_VERSION=$(read_config CAPI_VERSION)
+CAPK_VERSION=$(read_config CAPK_VERSION)
+CERT_MANAGER_VERSION=$(read_config CERT_MANAGER_VERSION)
+ASSISTED_SERVICE_TAG=$(read_config ASSISTED_SERVICE_TAG)
+ASSISTED_SERVICE_CRD_PATHS=$(read_config ASSISTED_SERVICE_CRD_PATHS)
+ASSISTED_SERVICE_KUSTOMIZE_PATH=$(read_config ASSISTED_SERVICE_KUSTOMIZE_PATH)
+CAPOA_REPO_REF=$(read_config CAPOA_REPO_REF)
+CAPOA_CONTROLPLANE_MANIFEST=$(read_config CAPOA_CONTROLPLANE_MANIFEST)
+CAPOA_BOOTSTRAP_MANIFEST=$(read_config CAPOA_BOOTSTRAP_MANIFEST)
+AGENTSERVICECONFIG_MANIFEST=$(read_config AGENTSERVICECONFIG_MANIFEST)
+CAPOA_CTRL_IMAGE=$(read_config CAPOA_CTRL_IMAGE)
+CAPOA_BOOT_IMAGE=$(read_config CAPOA_BOOT_IMAGE)
 
-ARTIFACT_DIR=${ARTIFACT_DIR:-/tmp/artifacts}
-mkdir -p "${ARTIFACT_DIR}"
+for _key in CAPI_VERSION CAPK_VERSION CERT_MANAGER_VERSION ASSISTED_SERVICE_TAG \
+    ASSISTED_SERVICE_CRD_PATHS ASSISTED_SERVICE_KUSTOMIZE_PATH \
+    CAPOA_REPO_REF CAPOA_CONTROLPLANE_MANIFEST CAPOA_BOOTSTRAP_MANIFEST \
+    AGENTSERVICECONFIG_MANIFEST CAPOA_CTRL_IMAGE CAPOA_BOOT_IMAGE; do
+    if [ -z "${!_key}" ]; then
+        echo "ERROR: ${_key} is not set and was not found in ${CONFIG_FILE}" >&2
+        exit 1
+    fi
+done
+unset _key
+
+command -v oc &>/dev/null || { echo "ERROR: 'oc' client not found in PATH" >&2; exit 1; }
 
 # clusterctl — download to /tmp/bin (no root required)
 mkdir -p /tmp/bin
 export PATH="${PATH}:/tmp/bin"
 if ! command -v clusterctl &>/dev/null; then
-    echo "Downloading clusterctl ${CAPI_VERSION}"
+    case "$(uname -m)" in
+        x86_64) clusterctl_arch=amd64 ;;
+        aarch64|arm64) clusterctl_arch=arm64 ;;
+        *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+    esac
+    echo "Downloading clusterctl ${CAPI_VERSION} (${clusterctl_arch})"
     curl -fsSL \
-        "https://github.com/kubernetes-sigs/cluster-api/releases/download/${CAPI_VERSION}/clusterctl-linux-amd64" \
+        "https://github.com/kubernetes-sigs/cluster-api/releases/download/${CAPI_VERSION}/clusterctl-linux-${clusterctl_arch}" \
         -o /tmp/bin/clusterctl
     chmod +x /tmp/bin/clusterctl
 fi
 clusterctl version
-
-TOTAL=0
-FAILURES=0
-TESTCASES_XML=""
-
-function add_testcase() {
-    local test_name="$1"
-    local test_passed="$2"
-
-    TOTAL=$((TOTAL + 1))
-
-    if [[ "$test_passed" == "false" ]]; then
-        FAILURES=$((FAILURES + 1))
-        TESTCASES_XML+="  <testcase name=\"${test_name}\"><failure message=\"Failed step\"/></testcase>\n"
-        exit 1
-    else
-        TESTCASES_XML+="  <testcase name=\"${test_name}\"/>\n"
-    fi
-}
-
-function generateResultFile() {
-    local results_file="${1}"
-    printf '<?xml version="1.0" encoding="UTF-8"?>\n' > "${results_file}"
-    printf '<testsuite name="capoa-kubevirt-deploy" tests="%s" failures="%s">\n' \
-        "${TOTAL}" "${FAILURES}" >> "${results_file}"
-    printf "${TESTCASES_XML}" >> "${results_file}"
-    printf '</testsuite>\n' >> "${results_file}"
-}
-
-function cleanup() {
-    rv=$?
-    if [ "x$rv" != "x0" ]; then
-        echo "Error during CAPOA+KubeVirt deployment: exit status: $rv"
-        echo "*** CAPOA+KubeVirt deployment failed ***"
-    fi
-    generateResultFile "${ARTIFACT_DIR}/junit_capoa_kubevirt_deploy.xml"
-    exit $rv
-}
-
-trap "cleanup" INT TERM EXIT
 
 # ---------------------------------------------------------------------------
 # Step 1: cert-manager (required for CAPOA webhooks)
@@ -102,8 +95,10 @@ function install_cert_manager() {
 function install_capi_and_capk() {
     echo "Installing CAPI ${CAPI_VERSION} + CAPK ${CAPK_VERSION}"
 
-    # Bootstrap (-) and control-plane (-) are skipped: CAPOA provides them.
+    # Bootstrap (-) and control-plane (-) are skipped: CAPOA provides them,
+    # but it is installed with oc apply in the next step (not via clusterctl).
     clusterctl init \
+        --config "${CONFIG_FILE}" \
         --core "cluster-api:${CAPI_VERSION}" \
         --bootstrap - \
         --control-plane - \
@@ -128,21 +123,22 @@ function install_capi_and_capk() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 3: Install CAPOA providers
+# Step 3: Install CAPOA providers (git manifests, not via clusterctl)
 # ---------------------------------------------------------------------------
 function install_capoa() {
-    echo "Installing CAPOA providers"
+    echo "Installing CAPOA providers (ref: ${CAPOA_REPO_REF})"
     echo "  controlplane: ${CAPOA_CTRL_IMAGE}"
     echo "  bootstrap:    ${CAPOA_BOOT_IMAGE}"
 
+    local capoa_raw="https://raw.githubusercontent.com/openshift-assisted/cluster-api-provider-openshift-assisted/${CAPOA_REPO_REF}"
     local orig_ctrl="quay.io/edge-infrastructure/cluster-api-controlplane-provider-openshift-assisted:latest"
     local orig_boot="quay.io/edge-infrastructure/cluster-api-bootstrap-provider-openshift-assisted:latest"
 
-    curl -fsSL "${CAPOA_RAW_BASE}/test/e2e/manifests/capcoa/controlplane_install.yaml" \
+    curl -fsSL "${capoa_raw}/${CAPOA_CONTROLPLANE_MANIFEST}" \
         | sed "s|${orig_ctrl}|${CAPOA_CTRL_IMAGE}|g" \
         | oc apply -f -
 
-    curl -fsSL "${CAPOA_RAW_BASE}/test/e2e/manifests/capboa/bootstrap_install.yaml" \
+    curl -fsSL "${capoa_raw}/${CAPOA_BOOTSTRAP_MANIFEST}" \
         | sed "s|${orig_boot}|${CAPOA_BOOT_IMAGE}|g" \
         | oc apply -f -
 
@@ -161,17 +157,19 @@ function install_capoa() {
 # Step 4: Install assisted-service (infrastructure-operator) standalone
 # ---------------------------------------------------------------------------
 function install_assisted_service() {
-    echo "Installing assisted-service (upstream latest)"
+    echo "Installing assisted-service ${ASSISTED_SERVICE_TAG}"
 
-    local assisted_raw="https://raw.githubusercontent.com/openshift/assisted-service/master"
+    local assisted_raw="https://raw.githubusercontent.com/openshift/assisted-service/${ASSISTED_SERVICE_TAG}"
 
     # Required CRDs not bundled in the infrastructure-operator itself
-    oc apply -f "${assisted_raw}/hack/crds/hive/hive.openshift.io_clusterdeployments.yaml"
-    oc apply -f "${assisted_raw}/hack/crds/hive/hive.openshift.io_clusterimagesets.yaml"
-    oc apply -f "${assisted_raw}/hack/crds/mce/managedclusters.cluster.open-cluster-management.io.yaml"
+    local crd_path crd_paths
+    read -ra crd_paths <<< "${ASSISTED_SERVICE_CRD_PATHS}"
+    for crd_path in "${crd_paths[@]}"; do
+        oc apply -f "${assisted_raw}/${crd_path}"
+    done
 
     # infrastructure-operator with default upstream images (no digest pinning)
-    oc apply -k "github.com/openshift/assisted-service/config/default"
+    oc apply -k "github.com/openshift/assisted-service/${ASSISTED_SERVICE_KUSTOMIZE_PATH}?ref=${ASSISTED_SERVICE_TAG}"
 
     # OCP RBAC: infrastructure-operator needs read access to OpenShift-specific APIs
     # (e.g. apiservers.config.openshift.io) not covered by its upstream ClusterRole
@@ -190,28 +188,7 @@ function install_assisted_service() {
         --timeout=5m
 
     # AgentServiceConfig — triggers assisted-service deployment
-    oc apply -f - <<'EOF'
-apiVersion: agent-install.openshift.io/v1beta1
-kind: AgentServiceConfig
-metadata:
-  name: agent
-  annotations:
-    agent-install.openshift.io/enable-image-service: "false"
-spec:
-  databaseStorage:
-    accessModes:
-    - ReadWriteOnce
-    resources:
-      requests:
-        storage: 10Gi
-  filesystemStorage:
-    accessModes:
-    - ReadWriteOnce
-    resources:
-      requests:
-        storage: 10Gi
-  osImages: []
-EOF
+    oc apply -f "${REPO_DIR}/${AGENTSERVICECONFIG_MANIFEST}"
 
     oc wait deployment assisted-service \
         -n assisted-installer \
@@ -238,18 +215,11 @@ EOF
 # Main
 # ---------------------------------------------------------------------------
 echo "=== CAPOA+KubeVirt standalone deployment ==="
-echo "CAPI: ${CAPI_VERSION} | CAPK: ${CAPK_VERSION} | CAPOA ref: ${CAPOA_REPO_REF}"
+echo "CAPI: ${CAPI_VERSION} | CAPK: ${CAPK_VERSION} | CAPOA ref: ${CAPOA_REPO_REF} | assisted-service: ${ASSISTED_SERVICE_TAG}"
 
-install_cert_manager     || add_testcase "install_cert_manager"     "false"
-add_testcase "install_cert_manager" "true"
-
-install_capi_and_capk    || add_testcase "install_capi_and_capk"    "false"
-add_testcase "install_capi_and_capk" "true"
-
-install_capoa            || add_testcase "install_capoa"            "false"
-add_testcase "install_capoa" "true"
-
-install_assisted_service || add_testcase "install_assisted_service" "false"
-add_testcase "install_assisted_service" "true"
+install_cert_manager
+install_capi_and_capk
+install_capoa
+install_assisted_service
 
 echo "=== CAPOA+KubeVirt standalone deployment complete ==="

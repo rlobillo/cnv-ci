@@ -1,38 +1,69 @@
 #!/usr/bin/env bash
-# Deploy a KubeVirt tenant cluster via CAPOA and run OpenShift conformance on it.
+# Deploy a compact KubeVirt tenant cluster via CAPOA and run OpenShift conformance on it.
 #
 # Assumes deploy-capoa-kubevirt.sh already ran successfully (CAPI+CAPK+CAPOA ready).
 #
 # Required env vars:
 #   ARTIFACT_DIR        - directory for JUnit results and logs (set by Prow)
 #
-# Optional env vars (auto-discovered from hub cluster if not set):
+# Optional env vars (auto-discovered from the hub cluster if not set):
 #   PULL_SECRET         - pull secret JSON (default: extracted from hub openshift-config/pull-secret)
-#
-# Optional env vars:
-#   CLUSTER_NAME        - tenant cluster name (default: capoa-kubevirt-test)
-#   TENANT_NAMESPACE    - namespace to create tenant cluster in (default: capoa-kubevirt-test)
-#   OCP_VERSION         - OpenShift version to install (default: 4.18.0)
 #   BASE_DOMAIN         - base domain for the tenant cluster (default: from hub ingress)
 #   STORAGE_CLASS       - storage class for VM root disks (default: from hub default SC)
-#   SSH_AUTHORIZED_KEY  - SSH public key for cluster nodes (default: empty)
-#   ASSISTED_NAMESPACE  - namespace where assisted-service runs (default: multicluster-engine)
-#   CONFORMANCE_TIMEOUT - timeout for conformance run (default: 3h)
+#   OCP_VERSION         - OpenShift version to install (default: hub version,
+#                         fallback defined in hack/deploy-capoa-kubevirt.yaml)
+#
+# Defaults for all other tunables (cluster name, namespaces, timeouts, SSH
+# key, manifest paths) are centralized in hack/deploy-capoa-kubevirt.yaml.
+# Every key defined there can be overridden through a same-named
+# environment variable:
+#   CLUSTER_NAME, TENANT_NAMESPACE, ASSISTED_NAMESPACE, SSH_AUTHORIZED_KEY,
+#   INSTALL_TIMEOUT_MIN, FINALIZING_TIMEOUT_MIN, CONFORMANCE_TIMEOUT
 
 set -euxo pipefail
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-MANIFESTS_DIR="${SCRIPT_DIR}/../manifests/capoa"
+REPO_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
+CONFIG_FILE="${SCRIPT_DIR}/deploy-capoa-kubevirt.yaml"
 
-CLUSTER_NAME=${CLUSTER_NAME:-capoa-kubevirt-test}
-TENANT_NAMESPACE=${TENANT_NAMESPACE:-capoa-kubevirt-test}
-ASSISTED_NAMESPACE=${ASSISTED_NAMESPACE:-assisted-installer}
+# Reads a configuration key from ${CONFIG_FILE}; an environment variable
+# with the same name takes precedence.
+function read_config() {
+    local key="$1"
+    if [ -n "${!key:-}" ]; then
+        printf '%s\n' "${!key}"
+        return
+    fi
+    sed -n "s/^${key}:[[:space:]]*//p" "${CONFIG_FILE}" | tr -d "\"'" | head -n1
+}
 
-# Default OCP version to match hub cluster (same RHCOS stream → reuse coreos-bootimages URL)
+CLUSTER_NAME=$(read_config CLUSTER_NAME)
+TENANT_NAMESPACE=$(read_config TENANT_NAMESPACE)
+ASSISTED_NAMESPACE=$(read_config ASSISTED_NAMESPACE)
+SSH_AUTHORIZED_KEY=$(read_config SSH_AUTHORIZED_KEY)
+INSTALL_TIMEOUT_MIN=$(read_config INSTALL_TIMEOUT_MIN)
+FINALIZING_TIMEOUT_MIN=$(read_config FINALIZING_TIMEOUT_MIN)
+CONFORMANCE_TIMEOUT=$(read_config CONFORMANCE_TIMEOUT)
+AGENTSERVICECONFIG_MANIFEST=$(read_config AGENTSERVICECONFIG_MANIFEST)
+TENANT_CLUSTER_MANIFEST=$(read_config TENANT_CLUSTER_MANIFEST)
+
+# OpenShift version to install: env var > hub cluster version > config
+# fallback (matches the hub RHCOS stream → reuse coreos-bootimages URL).
 OCP_VERSION=${OCP_VERSION:-$(oc get clusterversion version \
-    -o jsonpath='{.status.desired.version}' 2>/dev/null || echo "4.22.17")}
+    -o jsonpath='{.status.desired.version}' 2>/dev/null || true)}
+OCP_VERSION=${OCP_VERSION:-$(read_config OCP_VERSION)}
+
+for _key in CLUSTER_NAME TENANT_NAMESPACE ASSISTED_NAMESPACE OCP_VERSION \
+    SSH_AUTHORIZED_KEY INSTALL_TIMEOUT_MIN FINALIZING_TIMEOUT_MIN \
+    CONFORMANCE_TIMEOUT AGENTSERVICECONFIG_MANIFEST TENANT_CLUSTER_MANIFEST; do
+    if [ -z "${!_key}" ]; then
+        echo "ERROR: ${_key} is not set and was not found in ${CONFIG_FILE}" >&2
+        exit 1
+    fi
+done
+unset _key
+
 OCP_MAJOR_MINOR=$(echo "${OCP_VERSION}" | cut -d. -f1,2)
-CONFORMANCE_TIMEOUT=${CONFORMANCE_TIMEOUT:-3h}
 
 ARTIFACT_DIR=${ARTIFACT_DIR:-/tmp/artifacts}
 mkdir -p "${ARTIFACT_DIR}"
@@ -88,14 +119,12 @@ trap "cleanup" INT TERM EXIT
 BASE_DOMAIN=${BASE_DOMAIN:-$(oc get ingresscontroller default -n openshift-ingress-operator \
     -o jsonpath='{.status.domain}' 2>/dev/null)}
 STORAGE_CLASS=${STORAGE_CLASS:-$(oc get sc -o jsonpath='{.items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")].metadata.name}' 2>/dev/null)}
+set +x
 PULL_SECRET=${PULL_SECRET:-$(oc get secret pull-secret -n openshift-config \
     -o jsonpath='{.data.\.dockerconfigjson}' | base64 -d)}
-SSH_AUTHORIZED_KEY=${SSH_AUTHORIZED_KEY:-"ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCj47ubVnxR16JU7ZfDli3N5QVBAwJBRh2xMryyjk5dtfugo5JIPGB2cyXTqEDdzuRmI+Vkb/A5duJyBRlA+9RndGGmhhMnj8and3wu5/cEb7DkF6ZJ25QV4LQx3K/i57LStUHXRTvruHOZ2nCuVXWqi7wSvz5YcvEv7O8pNF5uGmqHlShBdxQxcjurXACZ1YY0YDJDr3AJai1KF9zehVJODuSbrnOYpThVWGjFuFAnNxbtuZ8EOSougN2aYTf2qr/KFGDHtewIkzZmP6cjzKO5bN3pVbXxmb2Gces/BYHntY4MXBTUqwsmsCRC5SAz14bEP/vsLtrNhjq9vCS+BjMT"}
+set -x
 
 echo "OCP_VERSION:   ${OCP_VERSION}"
-echo "BASE_DOMAIN:   ${BASE_DOMAIN}"
-echo "STORAGE_CLASS: ${STORAGE_CLASS}"
-
 echo "BASE_DOMAIN:   ${BASE_DOMAIN}"
 echo "STORAGE_CLASS: ${STORAGE_CLASS}"
 
@@ -105,7 +134,7 @@ echo "STORAGE_CLASS: ${STORAGE_CLASS}"
 function ensure_assisted_service() {
     if ! oc get agentserviceconfig agent &>/dev/null; then
         echo "Creating AgentServiceConfig"
-        oc apply -f "${MANIFESTS_DIR}/agentserviceconfig.yaml"
+        oc apply -f "${REPO_DIR}/${AGENTSERVICECONFIG_MANIFEST}"
     else
         echo "AgentServiceConfig already exists"
     fi
@@ -120,8 +149,10 @@ function ensure_assisted_service() {
 # Step 2: deploy tenant cluster
 # ---------------------------------------------------------------------------
 function deploy_tenant_cluster() {
+    set +x
     PULL_SECRET_B64=$(echo "${PULL_SECRET}" | base64 -w0)
     INFRA_KUBECONFIG_B64=$(base64 -w0 < "${KUBECONFIG}")
+    set -x
 
     # Pre-create RHCOS URL ConfigMap from hub's coreos-bootimages to bypass
     # the private image resolution job (ocp-v4.0-art-dev is Red Hat internal only).
@@ -144,7 +175,7 @@ function deploy_tenant_cluster() {
     export CLUSTER_NAME TENANT_NAMESPACE OCP_VERSION OCP_MAJOR_MINOR BASE_DOMAIN \
            STORAGE_CLASS SSH_AUTHORIZED_KEY PULL_SECRET_B64 INFRA_KUBECONFIG_B64
 
-    oc apply -f <(envsubst < "${MANIFESTS_DIR}/kubevirt-tenant-cluster.yaml")
+    oc apply -f <(envsubst < "${REPO_DIR}/${TENANT_CLUSTER_MANIFEST}")
 }
 
 # ---------------------------------------------------------------------------
@@ -153,7 +184,7 @@ function deploy_tenant_cluster() {
 function wait_for_installation() {
     echo "Waiting for AgentClusterInstall to reach installed state"
 
-    local deadline=$(( $(date +%s) + 5400 ))  # 90 min
+    local deadline=$(( $(date +%s) + INSTALL_TIMEOUT_MIN * 60 ))
     local finalizing_extended=false
 
     while true; do
@@ -170,8 +201,8 @@ function wait_for_installation() {
         fi
 
         if [[ "${state}" == "finalizing" && "${finalizing_extended}" == "false" ]]; then
-            echo "Cluster finalizing (operators deploying) — extending deadline by 30m"
-            deadline=$(( deadline + 1800 ))
+            echo "Cluster finalizing (operators deploying) — extending deadline by ${FINALIZING_TIMEOUT_MIN}m"
+            deadline=$(( deadline + FINALIZING_TIMEOUT_MIN * 60 ))
             finalizing_extended=true
         fi
 
@@ -207,7 +238,17 @@ function get_tenant_kubeconfig() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 5: run conformance (TODO: enable once cluster deployment is validated)
+# Step 5: smoke-check the tenant cluster through its kubeconfig
+# ---------------------------------------------------------------------------
+function smoke_check_tenant() {
+    local tenant_kubeconfig="${1}"
+    echo "Smoke-checking tenant cluster via ${tenant_kubeconfig}"
+    oc --kubeconfig "${tenant_kubeconfig}" get nodes
+    oc --kubeconfig "${tenant_kubeconfig}" get clusteroperators
+}
+
+# ---------------------------------------------------------------------------
+# Step 6: run conformance (TODO: enable once cluster deployment is validated)
 # ---------------------------------------------------------------------------
 # function run_conformance() {
 #     local tenant_kubeconfig="${1}"
@@ -237,6 +278,9 @@ add_testcase "wait_for_installation" "true"
 
 TENANT_KUBECONFIG=$(get_tenant_kubeconfig) || add_testcase "get_tenant_kubeconfig" "false"
 add_testcase "get_tenant_kubeconfig" "true"
+
+smoke_check_tenant "${TENANT_KUBECONFIG}" || add_testcase "smoke_check_tenant" "false"
+add_testcase "smoke_check_tenant" "true"
 
 # TODO: run conformance once cluster deployment is validated end-to-end
 # run_conformance "${TENANT_KUBECONFIG}"     || add_testcase "run_conformance"        "false"
