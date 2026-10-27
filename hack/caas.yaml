@@ -1,9 +1,8 @@
-# Unified configuration for the CAPOA+KubeVirt standalone deployment and
-# e2e test.
+# Unified configuration for the CAAS standalone deployment and tenant
+# lifecycle scripts.
 #
-# All versions and external references used by deploy-capoa-kubevirt.sh and
-# test-capoa-kubevirt.sh are
-# defined here. Each key can be overridden through a same-named environment
+# All versions and external references used by deploy-caas-standalone.sh,
+# create-caas-tenant.sh and delete-caas-tenant.sh are defined here. Each key can be overridden through a same-named environment
 # variable. This file is also passed to clusterctl (--config): keys that
 # clusterctl does not interpret are treated as variable-substitution values,
 # which is harmless.
@@ -48,13 +47,13 @@ CAPOA_BOOTSTRAP_MANIFEST: "test/e2e/manifests/capboa/bootstrap_install.yaml"
 CAPOA_CTRL_IMAGE: "quay.io/edge-infrastructure/cluster-api-controlplane-provider-openshift-assisted:latest"
 CAPOA_BOOT_IMAGE: "quay.io/edge-infrastructure/cluster-api-bootstrap-provider-openshift-assisted:latest"
 
-# AgentServiceConfig manifest applied by deploy-capoa-kubevirt.sh and
-# test-capoa-kubevirt.sh (relative to the repository root).
+# AgentServiceConfig manifest applied by deploy-caas-standalone.sh and
+# create-caas-tenant.sh (relative to the repository root).
 AGENTSERVICECONFIG_MANIFEST: "manifests/capoa/agentserviceconfig.yaml"
 
-# --- test-capoa-kubevirt.sh -------------------------------------------------
+# --- create-caas-tenant.sh ---------------------------------------------------
 #
-# Defaults for the tenant cluster e2e test. The hub cluster is introspected
+# Defaults for the tenant cluster creation. The hub cluster is introspected
 # at runtime for PULL_SECRET, BASE_DOMAIN, STORAGE_CLASS and OCP_VERSION
 # (the value below is only the fallback when discovery fails).
 
@@ -78,9 +77,32 @@ SSH_AUTHORIZED_KEY: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCj47ubVnxR16JU7ZfDli3
 INSTALL_TIMEOUT_MIN: "90"
 FINALIZING_TIMEOUT_MIN: "30"
 
-# Timeout for the openshift conformance run (currently disabled).
-CONFORMANCE_TIMEOUT: "3h"
-
 # Tenant cluster manifest, rendered with envsubst (relative to the
 # repository root).
 TENANT_CLUSTER_MANIFEST: "manifests/capoa/kubevirt-tenant-cluster.yaml"
+
+# --- delete-caas-tenant.sh ---------------------------------------------------
+#
+# Hub-side ODF parameters used to verify (read-only) that the tenant RBD
+# images were reclaimed after deletion. The script never modifies ODF data.
+
+# Namespace where ODF (rook) runs on the hub.
+ODF_NAMESPACE: "openshift-storage"
+
+# RBD pool backing the tenant VM disks.
+RBD_POOL: "ocs-storagecluster-cephblockpool"
+
+# Image for the temporary ceph toolbox pod created when no rook-ceph-tools
+# deployment exists (must contain the ceph/rbd CLI; pulled with the hub
+# cluster pull secret).
+CEPH_TOOLBOX_IMAGE: "registry.redhat.io/rhceph/rhceph-9-rhel9@sha256:24cbdc19397726aa75f21a253ee351d2c8a983fcc4c528c1894668adfde657bc"
+
+# Minutes to wait for the tenant namespace and its PVs to disappear before
+# forcing the cleanup.
+NAMESPACE_DELETE_TIMEOUT_MIN: "10"
+PV_DELETE_TIMEOUT_MIN: "5"
+
+# Minutes to wait for the CSI to reclaim the tenant RBD images (the
+# external-provisioner retries DeleteVolume with backoff) before the final
+# verification reports them as leftovers.
+RBD_RECLAIM_TIMEOUT_MIN: "15"

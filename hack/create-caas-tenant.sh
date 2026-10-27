@@ -1,30 +1,41 @@
 #!/usr/bin/env bash
-# Deploy a compact KubeVirt tenant cluster via CAPOA and run OpenShift conformance on it.
+# Deploy a CAAS tenant cluster on the hub and smoke-check it.
 #
-# Assumes deploy-capoa-kubevirt.sh already ran successfully (CAPI+CAPK+CAPOA ready).
+# Assumes deploy-caas-standalone.sh already ran successfully
+# (CAPI+CAPK+CAPOA ready).
+#
+# What it does:
+#   1. ensure AgentServiceConfig + assisted-service ready
+#   2. apply the tenant cluster manifest
+#   3. wait for the AgentClusterInstall to reach "installed"
+#   4. extract the tenant kubeconfig into ARTIFACT_DIR
+#   5. smoke-check the tenant cluster (oc get nodes)
+#
+# Nothing else: conformance runs and tenant deletion are driven by separate
+# Prow steps (see delete-caas-tenant.sh).
 #
 # Required env vars:
-#   ARTIFACT_DIR        - directory for JUnit results and logs (set by Prow)
+#   ARTIFACT_DIR        - directory for the tenant kubeconfig and logs (set by Prow)
 #
 # Optional env vars (auto-discovered from the hub cluster if not set):
 #   PULL_SECRET         - pull secret JSON (default: extracted from hub openshift-config/pull-secret)
 #   BASE_DOMAIN         - base domain for the tenant cluster (default: from hub ingress)
 #   STORAGE_CLASS       - storage class for VM root disks (default: from hub default SC)
 #   OCP_VERSION         - OpenShift version to install (default: hub version,
-#                         fallback defined in hack/deploy-capoa-kubevirt.yaml)
+#                         fallback defined in hack/caas.yaml)
 #
 # Defaults for all other tunables (cluster name, namespaces, timeouts, SSH
-# key, manifest paths) are centralized in hack/deploy-capoa-kubevirt.yaml.
+# key, manifest paths) are centralized in hack/caas.yaml.
 # Every key defined there can be overridden through a same-named
 # environment variable:
 #   CLUSTER_NAME, TENANT_NAMESPACE, ASSISTED_NAMESPACE, SSH_AUTHORIZED_KEY,
-#   INSTALL_TIMEOUT_MIN, FINALIZING_TIMEOUT_MIN, CONFORMANCE_TIMEOUT
+#   INSTALL_TIMEOUT_MIN, FINALIZING_TIMEOUT_MIN
 
 set -euxo pipefail
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 REPO_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
-CONFIG_FILE="${SCRIPT_DIR}/deploy-capoa-kubevirt.yaml"
+CONFIG_FILE="${SCRIPT_DIR}/caas.yaml"
 
 # Reads a configuration key from ${CONFIG_FILE}; an environment variable
 # with the same name takes precedence.
@@ -43,7 +54,6 @@ ASSISTED_NAMESPACE=$(read_config ASSISTED_NAMESPACE)
 SSH_AUTHORIZED_KEY=$(read_config SSH_AUTHORIZED_KEY)
 INSTALL_TIMEOUT_MIN=$(read_config INSTALL_TIMEOUT_MIN)
 FINALIZING_TIMEOUT_MIN=$(read_config FINALIZING_TIMEOUT_MIN)
-CONFORMANCE_TIMEOUT=$(read_config CONFORMANCE_TIMEOUT)
 AGENTSERVICECONFIG_MANIFEST=$(read_config AGENTSERVICECONFIG_MANIFEST)
 TENANT_CLUSTER_MANIFEST=$(read_config TENANT_CLUSTER_MANIFEST)
 
@@ -55,7 +65,7 @@ OCP_VERSION=${OCP_VERSION:-$(read_config OCP_VERSION)}
 
 for _key in CLUSTER_NAME TENANT_NAMESPACE ASSISTED_NAMESPACE OCP_VERSION \
     SSH_AUTHORIZED_KEY INSTALL_TIMEOUT_MIN FINALIZING_TIMEOUT_MIN \
-    CONFORMANCE_TIMEOUT AGENTSERVICECONFIG_MANIFEST TENANT_CLUSTER_MANIFEST; do
+    AGENTSERVICECONFIG_MANIFEST TENANT_CLUSTER_MANIFEST; do
     if [ -z "${!_key}" ]; then
         echo "ERROR: ${_key} is not set and was not found in ${CONFIG_FILE}" >&2
         exit 1
@@ -67,51 +77,6 @@ OCP_MAJOR_MINOR=$(echo "${OCP_VERSION}" | cut -d. -f1,2)
 
 ARTIFACT_DIR=${ARTIFACT_DIR:-/tmp/artifacts}
 mkdir -p "${ARTIFACT_DIR}"
-
-TOTAL=0
-FAILURES=0
-TESTCASES_XML=""
-
-function add_testcase() {
-    local test_name="$1"
-    local test_passed="$2"
-
-    TOTAL=$((TOTAL + 1))
-
-    if [[ "$test_passed" == "false" ]]; then
-        FAILURES=$((FAILURES + 1))
-        TESTCASES_XML+="  <testcase name=\"${test_name}\"><failure message=\"Failed step\"/></testcase>\n"
-        exit 1
-    else
-        TESTCASES_XML+="  <testcase name=\"${test_name}\"/>\n"
-    fi
-}
-
-function generateResultFile() {
-    local results_file="${1}"
-    printf '<?xml version="1.0" encoding="UTF-8"?>\n' > "${results_file}"
-    printf '<testsuite name="capoa-kubevirt-test" tests="%s" failures="%s">\n' \
-        "${TOTAL}" "${FAILURES}" >> "${results_file}"
-    printf "${TESTCASES_XML}" >> "${results_file}"
-    printf '</testsuite>\n' >> "${results_file}"
-}
-
-function cleanup() {
-    rv=$?
-    if [ "x$rv" != "x0" ]; then
-        echo "*** Test failed — collecting diagnostics ***"
-        oc get cluster,kubevirtcluster,oacp,agentclusterinstall -n "${TENANT_NAMESPACE}" 2>/dev/null || true
-        oc get agents -n "${TENANT_NAMESPACE}" 2>/dev/null || true
-        oc describe agentclusterinstall -n "${TENANT_NAMESPACE}" 2>/dev/null \
-            > "${ARTIFACT_DIR}/agentclusterinstall.txt" || true
-        oc logs -n "${ASSISTED_NAMESPACE}" deployment/assisted-service --tail=200 2>/dev/null \
-            > "${ARTIFACT_DIR}/assisted-service.log" || true
-    fi
-    generateResultFile "${ARTIFACT_DIR}/junit_capoa_kubevirt_test.xml"
-    exit $rv
-}
-
-trap "cleanup" INT TERM EXIT
 
 # ---------------------------------------------------------------------------
 # Discover hub cluster parameters
@@ -244,46 +209,19 @@ function smoke_check_tenant() {
     local tenant_kubeconfig="${1}"
     echo "Smoke-checking tenant cluster via ${tenant_kubeconfig}"
     oc --kubeconfig "${tenant_kubeconfig}" get nodes
-    oc --kubeconfig "${tenant_kubeconfig}" get clusteroperators
 }
-
-# ---------------------------------------------------------------------------
-# Step 6: run conformance (TODO: enable once cluster deployment is validated)
-# ---------------------------------------------------------------------------
-# function run_conformance() {
-#     local tenant_kubeconfig="${1}"
-#     echo "Running openshift conformance on tenant cluster"
-#     oc --kubeconfig "${tenant_kubeconfig}" get nodes
-#     openshift-tests run openshift/conformance/minimal \
-#         --kubeconfig "${tenant_kubeconfig}" \
-#         --junit-dir "${ARTIFACT_DIR}" \
-#         --timeout "${CONFORMANCE_TIMEOUT}" \
-#         2>&1 | tee "${ARTIFACT_DIR}/conformance.log"
-# }
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-echo "=== CAPOA+KubeVirt tenant cluster test ==="
+echo "=== CAAS tenant cluster deployment ==="
 echo "Cluster: ${CLUSTER_NAME} | OCP: ${OCP_VERSION} | Namespace: ${TENANT_NAMESPACE}"
 
-ensure_assisted_service  || add_testcase "ensure_assisted_service" "false"
-add_testcase "ensure_assisted_service" "true"
+ensure_assisted_service
+deploy_tenant_cluster
+wait_for_installation
+TENANT_KUBECONFIG=$(get_tenant_kubeconfig)
+smoke_check_tenant "${TENANT_KUBECONFIG}"
 
-deploy_tenant_cluster    || add_testcase "deploy_tenant_cluster"   "false"
-add_testcase "deploy_tenant_cluster" "true"
-
-wait_for_installation    || add_testcase "wait_for_installation"   "false"
-add_testcase "wait_for_installation" "true"
-
-TENANT_KUBECONFIG=$(get_tenant_kubeconfig) || add_testcase "get_tenant_kubeconfig" "false"
-add_testcase "get_tenant_kubeconfig" "true"
-
-smoke_check_tenant "${TENANT_KUBECONFIG}" || add_testcase "smoke_check_tenant" "false"
-add_testcase "smoke_check_tenant" "true"
-
-# TODO: run conformance once cluster deployment is validated end-to-end
-# run_conformance "${TENANT_KUBECONFIG}"     || add_testcase "run_conformance"        "false"
-# add_testcase "run_conformance" "true"
-
-echo "=== CAPOA+KubeVirt tenant cluster test complete ==="
+echo "Tenant kubeconfig: ${TENANT_KUBECONFIG}"
+echo "=== CAAS tenant cluster ready ==="

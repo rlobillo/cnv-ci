@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# Uninstall everything deployed by deploy-capoa-kubevirt.sh and test-capoa-kubevirt.sh.
+# Uninstall everything deployed by deploy-caas-standalone.sh and
+# create-caas-tenant.sh.
 #
-# Removes: tenant cluster namespace, CAPOA providers, CAPK, standalone CAPI, cert-manager.
+# Removes: CAPOA providers, CAPK, standalone CAPI, cert-manager.
 # Does NOT touch MCE or any MCE-managed components.
 #
+# The tenant cluster itself (namespace, VMs, RBD images) is removed by
+# delete-caas-tenant.sh — run that first; this script only tears down the
+# hub-side providers.
+#
 # Optional env vars:
-#   TENANT_NAMESPACE    - tenant cluster namespace to delete (default: capoa-kubevirt-test)
+#   TENANT_NAMESPACE    - tenant namespace checked for leftovers (default: capoa-kubevirt-test)
 #   SKIP_CERT_MANAGER   - set to "true" to keep cert-manager (default: false)
 
 set -euxo pipefail
@@ -14,10 +19,13 @@ TENANT_NAMESPACE=${TENANT_NAMESPACE:-capoa-kubevirt-test}
 SKIP_CERT_MANAGER=${SKIP_CERT_MANAGER:-false}
 
 # ---------------------------------------------------------------------------
-# Tenant cluster
+# Tenant cluster — must be removed by delete-caas-tenant.sh first
 # ---------------------------------------------------------------------------
-echo "=== Deleting tenant cluster namespace ==="
-oc delete namespace "${TENANT_NAMESPACE}" --ignore-not-found --wait=false
+if oc get namespace "${TENANT_NAMESPACE}" &>/dev/null; then
+    echo "WARNING: tenant namespace ${TENANT_NAMESPACE} still exists."
+    echo "         Run hack/delete-caas-tenant.sh first — it also verifies that the"
+    echo "         RBD images backing the tenant VM disks were reclaimed."
+fi
 
 # ---------------------------------------------------------------------------
 # AgentServiceConfig (only if we created it — skip if MCE owns it)

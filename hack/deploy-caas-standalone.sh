@@ -5,7 +5,7 @@
 # clusterctl is downloaded at runtime to /tmp/bin.
 #
 # All versions and external references are centralized in
-# hack/deploy-capoa-kubevirt.yaml. Every key defined there can be overridden
+# hack/caas.yaml. Every key defined there can be overridden
 # through a same-named environment variable:
 #   CAPI_VERSION, CAPK_VERSION, CERT_MANAGER_VERSION, ASSISTED_SERVICE_TAG,
 #   ASSISTED_SERVICE_CRD_PATHS, ASSISTED_SERVICE_KUSTOMIZE_PATH,
@@ -15,13 +15,13 @@
 # CAPOA is installed with oc apply from git manifests, NOT via clusterctl:
 # CAPOA releases ship a stale metadata.yaml (releaseSeries only covers the
 # old 0.1 series) that makes "clusterctl init" fail for any newer release.
-# See hack/deploy-capoa-kubevirt.yaml for details.
+# See hack/caas.yaml for details.
 
 set -euxo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
-CONFIG_FILE="${SCRIPT_DIR}/deploy-capoa-kubevirt.yaml"
+CONFIG_FILE="${SCRIPT_DIR}/caas.yaml"
 
 # Reads a configuration key from ${CONFIG_FILE}; an environment variable
 # with the same name takes precedence.
