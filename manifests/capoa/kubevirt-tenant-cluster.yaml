@@ -31,13 +31,15 @@ metadata:
   name: ${CLUSTER_NAME}
   namespace: ${TENANT_NAMESPACE}
 spec:
+  # Keep the tenant networks separate from the hub networks. The hub uses
+  # 10.128.0.0/14 for pods and 172.30.0.0/16 for services.
   clusterNetwork:
     pods:
       cidrBlocks:
       - 10.132.0.0/14
     services:
       cidrBlocks:
-      - 172.30.0.0/16
+      - 172.31.0.0/16
   controlPlaneRef:
     apiGroup: controlplane.cluster.x-k8s.io
     kind: OpenshiftAssistedControlPlane
@@ -87,7 +89,7 @@ spec:
                 - ReadWriteOnce
                 resources:
                   requests:
-                    storage: 120Gi
+                    storage: 100Gi
                 storageClassName: ${STORAGE_CLASS}
                 volumeMode: Block
           runStrategy: Always
