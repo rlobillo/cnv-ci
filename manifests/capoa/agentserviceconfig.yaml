@@ -1,4 +1,4 @@
-# AgentServiceConfig deployed by deploy-capoa-kubevirt.sh.
+# AgentServiceConfig deployed by deploy-caas-standalone.sh.
 # Triggers the assisted-service deployment on the hub cluster.
 #
 # enable-image-service: "false" — CAPOA handles OS image delivery for
