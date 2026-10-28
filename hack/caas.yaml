@@ -77,29 +77,11 @@ FINALIZING_TIMEOUT_MIN: "30"
 TENANT_CLUSTER_MANIFEST: "manifests/capoa/kubevirt-tenant-cluster.yaml"
 
 # --- delete-caas-tenant.sh ---------------------------------------------------
-#
-# Hub-side ODF parameters used to verify (read-only) that the tenant RBD
-# images were reclaimed after deletion. The script never modifies ODF data.
-
-# Namespace where ODF (rook) runs on the hub.
-ODF_NAMESPACE: "openshift-storage"
-
-# RBD pool backing the tenant VM disks.
-RBD_POOL: "ocs-storagecluster-cephblockpool"
-
-# Image for the temporary ceph toolbox pod created when no rook-ceph-tools
-# deployment exists (must contain the ceph/rbd CLI). Empty (default) reuses
-# the exact image the ceph mons run, which is guaranteed to be pullable on
-# the hub — pinned digests get purged from the registry over time and leave
-# the pod pull hanging forever.
-CEPH_TOOLBOX_IMAGE: ""
 
 # Minutes to wait for the tenant namespace and its PVs to disappear before
-# forcing the cleanup.
-NAMESPACE_DELETE_TIMEOUT_MIN: "10"
-PV_DELETE_TIMEOUT_MIN: "5"
-
-# Minutes to wait for the CSI to reclaim the tenant RBD images (the
-# external-provisioner retries DeleteVolume with backoff) before the final
-# verification reports them as leftovers.
-RBD_RECLAIM_TIMEOUT_MIN: "15"
+# the script reports a failed cleanup. Generous on purpose: a false
+# negative (failing a healthy-but-slow cleanup, e.g. CSI DeleteVolume
+# retries with growing backoff) is worse than a delayed failure. The PV
+# timeout applies per PV; deletions run in parallel.
+NAMESPACE_DELETE_TIMEOUT_MIN: "15"
+PV_DELETE_TIMEOUT_MIN: "10"

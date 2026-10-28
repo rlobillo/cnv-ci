@@ -25,7 +25,7 @@ KubeVirt VMs on the hub pod network.
 | `deploy-caas-standalone.sh` | **Phase 1** — install the CAAS infrastructure directly on the hub: cert-manager, CAPI core, CAPK, the CAPOA control-plane and bootstrap providers, and a standalone assisted-service |
 | `deploy-caas-mce.sh` | **Phase 2** (placeholder, not implemented yet) — will install the same infrastructure managed by MCE |
 | `create-caas-tenant.sh` | Deploy the tenant cluster: apply the manifests, wait for the installation to complete, extract the tenant kubeconfig into `ARTIFACT_DIR` and smoke-check it (`oc get nodes`) |
-| `delete-caas-tenant.sh` | Delete the tenant cluster: remove the namespace, strip the finalizers that block termination, unmap stale RBD devices and verify that the hub storage was reclaimed — exits non-zero if anything is left behind |
+| `delete-caas-tenant.sh` | Delete the tenant cluster by removing its namespace and waiting for the Kubernetes garbage collection to complete; verifies that the tenant PVs were reclaimed — exits non-zero if anything is left behind. Never intervenes in the teardown |
 | `undeploy-caas-standalone.sh` | **Phase 1** — remove everything `deploy-caas-standalone.sh` installed (providers, standalone assisted-service, cert-manager). Run `delete-caas-tenant.sh` first |
 
 ## Typical flow
