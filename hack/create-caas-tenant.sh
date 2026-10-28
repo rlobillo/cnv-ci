@@ -57,12 +57,13 @@ FINALIZING_TIMEOUT_MIN=$(read_config FINALIZING_TIMEOUT_MIN)
 AGENTSERVICECONFIG_MANIFEST=$(read_config AGENTSERVICECONFIG_MANIFEST)
 TENANT_CLUSTER_MANIFEST=$(read_config TENANT_CLUSTER_MANIFEST)
 
-# OpenShift version to install: env var > caas.yaml > hub cluster version.
-# caas.yaml takes precedence over hub autodiscovery so that a hub running a
-# pre-release (e.g. 5.0-rc) does not silently override an explicit config.
-OCP_VERSION=${OCP_VERSION:-$(read_config OCP_VERSION)}
+# OpenShift version to install: env var > hub cluster version > config
+# fallback. Discovery keeps the tenant on the exact same version as the hub
+# (payload and RHCOS stream); pass OCP_VERSION explicitly when running
+# against a pre-release hub.
 OCP_VERSION=${OCP_VERSION:-$(oc get clusterversion version \
     -o jsonpath='{.status.desired.version}' 2>/dev/null || true)}
+OCP_VERSION=${OCP_VERSION:-$(read_config OCP_VERSION)}
 
 for _key in CLUSTER_NAME TENANT_NAMESPACE ASSISTED_NAMESPACE OCP_VERSION \
     SSH_AUTHORIZED_KEY INSTALL_TIMEOUT_MIN FINALIZING_TIMEOUT_MIN \
@@ -179,16 +180,15 @@ function wait_for_installation() {
 function get_tenant_kubeconfig() {
     local kubeconfig_path="${ARTIFACT_DIR}/tenant-kubeconfig"
 
-    oc get secret "${CLUSTER_NAME}-admin-kubeconfig" \
+    # The CAPI kubeconfig (key "value", maintained by the control plane
+    # provider) authenticates as system:admin and carries the correct Route
+    # endpoint on port 443. The ACI-generated admin-kubeconfig instead
+    # points to the apiserver port 6443, which the hub router does not
+    # serve, making it unusable from outside the hub.
+    oc get secret "${CLUSTER_NAME}-kubeconfig" \
         -n "${TENANT_NAMESPACE}" \
-        -o jsonpath='{.data.kubeconfig}' \
+        -o jsonpath='{.data.value}' \
         | base64 -d > "${kubeconfig_path}"
-
-    # The generated kubeconfig points at the tenant API on port 6443, but in
-    # pod-networking mode the API is exposed through a hub Route, served on
-    # port 443 (SNI passthrough to the service port 6443). Strip the port so
-    # the kubeconfig also works from outside the hub.
-    sed -i 's|:6443$||' "${kubeconfig_path}"
 
     echo "${kubeconfig_path}"
 }
