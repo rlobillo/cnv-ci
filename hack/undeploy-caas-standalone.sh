@@ -2,7 +2,9 @@
 # Uninstall everything deployed by deploy-caas-standalone.sh and
 # create-caas-tenant.sh.
 #
-# Removes: CAPOA providers, CAPK, standalone CAPI, cert-manager.
+# Removes: standalone assisted-service (AgentServiceConfig and the
+# infrastructure-operator namespace), CAPOA providers, CAPK, standalone
+# CAPI, cert-manager.
 # Does NOT touch MCE or any MCE-managed components.
 #
 # The tenant cluster itself (namespace, VMs, RBD images) is removed by
@@ -34,6 +36,11 @@ echo "=== Removing AgentServiceConfig (if standalone) ==="
 # Only delete if assisted-service is NOT in multicluster-engine (i.e. standalone install)
 if ! oc get deployment assisted-service -n multicluster-engine &>/dev/null; then
     oc delete agentserviceconfig agent --ignore-not-found
+    # The standalone install also leaves the infrastructure-operator and its
+    # namespace behind (the kustomize hardcodes assisted-installer) — remove
+    # them too so the teardown matches what deploy-caas-standalone.sh
+    # installed.
+    oc delete namespace assisted-installer --ignore-not-found --wait=false
 fi
 
 # ---------------------------------------------------------------------------
@@ -101,6 +108,48 @@ if [[ "${SKIP_CERT_MANAGER}" != "true" ]]; then
     oc delete validatingwebhookconfiguration cert-manager-webhook --ignore-not-found 2>/dev/null || true
 fi
 
+# ---------------------------------------------------------------------------
+# CAPI-related CRDs — clean leftovers and restore CVO/payload ownership
+# ---------------------------------------------------------------------------
+# The OCP payload ships its own copies of some CAPI CRDs (the ipam ones:
+# ipaddressclaims, ipaddresses — feature-gated ClusterAPIMachineManagement).
+# The standalone clusterctl install overwrote them with CAPI v1.11.x
+# versions where v1beta2 is the storage version. The API server then
+# refuses to let the CVO reconcile its payload version back:
+#   status.storedVersions[0]: Invalid value: "v1beta2": missing from
+#   spec.versions; v1beta2 was previously a storage version, and must
+#   remain in spec.versions until a storage migration...
+# which permanently blocks hub upgrades ("Could not update
+# customresourcedefinition ipaddressclaims..." in clusterversion).
+#
+# Deleting the empty CRDs resolves the conflict: the CVO recreates the
+# payload-owned ones on its next sync; CRDs installed only by
+# clusterctl/CAPK/CAPOA simply stay deleted.
+#
+# Only CRDs installed by this deployment are considered: clusterctl-labeled
+# CRDs (CAPI core/ipam/addons/runtime + CAPK) and the CAPOA provider CRDs.
+# Payload-owned CRDs never touched here (e.g. metal3 remediation ones) are
+# left alone. CRDs that still have instances are skipped with a warning.
+echo "=== Removing CAPI-related CRDs (empty ones only) ==="
+for crd in $(oc get crd -o name | grep -E '\.cluster\.x-k8s\.io$'); do
+    name="${crd#*/}"
+
+    # Skip CRDs this deployment never installed.
+    if ! oc get crd "${name}" -o jsonpath='{.metadata.labels}' | grep -q 'clusterctl\.cluster\.x-k8s\.io' \
+        && ! [[ "${name}" == openshiftassisted* ]]; then
+        continue
+    fi
+
+    # Never delete a CRD that still has instances.
+    if [ -n "$(oc get "${name}" -A -o name 2>/dev/null)" ]; then
+        echo "WARNING: ${name} still has instances — skipping"
+        continue
+    fi
+
+    oc delete crd "${name}" --ignore-not-found --wait=false
+done
+
 echo "=== CAPOA+KubeVirt undeployment complete ==="
 echo "Note: MCE and its managed components (CAPI in multicluster-engine) are untouched."
-echo "      CRDs (Cluster, KubevirtCluster, etc.) may remain — remove manually if needed."
+echo "      The CVO will recreate the payload-owned CAPI CRDs on its next sync;"
+echo "      check with: oc get clusterversion (Failing should clear within minutes)."
