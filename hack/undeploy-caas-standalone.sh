@@ -44,6 +44,21 @@ if ! oc get deployment assisted-service -n multicluster-engine &>/dev/null; then
 fi
 
 # ---------------------------------------------------------------------------
+# Manager-role aggregation — undo what deploy-caas-standalone.sh applied
+# ---------------------------------------------------------------------------
+# The standalone deploy labels the provider manager ClusterRoles with
+# rbac.authorization.k8s.io/aggregate-to-admin (workaround so project-admin
+# users can manage CAPI/CAPOA resources). Remove the label so namespace
+# admins do not keep the over-granted manager permissions after teardown.
+# Tolerates roles already deleted by the steps below.
+echo "=== Removing manager-role aggregation ==="
+for role in capi-manager-role capk-manager-role \
+    capoa-controlplane-manager-role capoa-bootstrap-manager-role; do
+    oc label clusterrole "${role}" rbac.authorization.k8s.io/aggregate-to-admin- \
+        2>/dev/null || true
+done
+
+# ---------------------------------------------------------------------------
 # CAPOA providers
 # ---------------------------------------------------------------------------
 echo "=== Removing CAPOA controlplane provider ==="

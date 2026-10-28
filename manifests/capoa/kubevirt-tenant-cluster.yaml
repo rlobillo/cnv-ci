@@ -143,6 +143,18 @@ spec:
     pullSecretRef:
       name: pull-secret
     sshAuthorizedKey: "${SSH_AUTHORIZED_KEY}"
+    # KubeVirt CCM: gives tenant nodes their providerID and implements
+    # LoadBalancer services (selectorless) on the tenant.
+    cloudControllerManager:
+      enabled: true
+    # KubeVirt CSI driver: tenant PVCs are backed by DataVolumes on the
+    # infra cluster. Creates a default `kubevirt-csi` StorageClass in the
+    # tenant. infraStorageClass must be an RBD-based StorageClass on the
+    # hub supporting Block volume mode (it is also used for the RHCOS
+    # golden PVC).
+    csiDriver:
+      enabled: true
+      infraStorageClass: ${CSI_STORAGE_CLASS}
   openshiftAssistedConfigSpec:
     pullSecretRef:
       name: pull-secret

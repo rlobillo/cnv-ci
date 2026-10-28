@@ -16,10 +16,27 @@
 
 # Cluster API version. Pins both the clusterctl binary downloaded by the
 # script and the core provider installed by "clusterctl init".
-CAPI_VERSION: "v1.11.3"
+# Supported specifiers (resolved at deploy time via git ls-remote, see
+# resolve_version in deploy-caas-standalone.sh):
+#   "v1.11.3"  exact release tag
+#   "v1.11"    series track: latest patch release of the v1.11 series
+#   "latest"   newest stable release
+# Default "latest": this job doubles as early warning for upstream
+# incompatibilities. CAPOA master vendors CAPI v1.12.x, so latest (v1.14.x
+# today) may run ahead of what CAPOA is built against; pin to CAPOA's
+# vendored series (e.g. "v1.12") if stability is preferred over drift
+# detection, or to an exact tag to reproduce a failure.
+CAPI_VERSION: "latest"
 
-# CAPK (cluster-api-provider-kubevirt) version.
-CAPK_VERSION: "v0.1.9"
+# CAPK (cluster-api-provider-kubevirt) version. Same specifier syntax as
+# CAPI_VERSION.
+# NOTE: CAPK v0.1.x implements only the CAPI v1beta1 contract, while CAPOA
+# labels the CAPK CRDs as v1beta2 (ensureCRDContractLabels in controlplane
+# main.go). With a v1beta1-only CAPK the CAPI machine controller waits for
+# status.initialization.provisioned forever and machines stay in
+# Provisioning. CAPK >= v0.11 implements the v1beta2 contract and keeps the
+# v1alpha1 APIs used by the tenant manifests — always use >= v0.11 here.
+CAPK_VERSION: "latest"
 
 # cert-manager version.
 CERT_MANAGER_VERSION: "v1.16.2"
@@ -75,6 +92,31 @@ FINALIZING_TIMEOUT_MIN: "30"
 # Tenant cluster manifest, rendered with envsubst (relative to the
 # repository root).
 TENANT_CLUSTER_MANIFEST: "manifests/capoa/kubevirt-tenant-cluster.yaml"
+
+# StorageClass on the hub used by the KubeVirt CSI driver for tenant PVCs
+# and by the RHCOS golden PVC (csiDriver.infraStorageClass in the OACP).
+# Must be RBD-based and support Block volume mode. Default: the ODF
+# storageclass created alongside OpenShift Virtualization.
+CSI_STORAGE_CLASS: "ocs-storagecluster-ceph-rbd-virtualization"
+
+# --- project-admin mode ------------------------------------------------------
+#
+# create-caas-tenant.sh provisions the tenant as this user: it is created
+# (htpasswd IDP), granted the built-in 'admin' role in the tenant namespace,
+# and a kubeconfig is generated for it and used for every subsequent step —
+# including the infra-cluster-credentials secret, which then carries the
+# project-admin kubeconfig (the topology promised by the epic's first user
+# story). The CAPI/CAPOA resources must already be aggregated into 'admin'
+# by the deployment: standalone does it in deploy-caas-standalone.sh
+# (manager-role aggregation workaround); MCE is expected to ship proper
+# aggregate roles (product gap, pending upstream).
+# Set to "" to keep the legacy cluster-admin flow. Requires the 'htpasswd'
+# binary.
+TENANT_ADMIN_USER: "tenant-admin"
+
+# Password for the project-admin user. Auto-generated (random) when empty;
+# written to ${ARTIFACT_DIR}/tenant-admin-credentials.txt.
+TENANT_ADMIN_PASSWORD: ""
 
 # --- delete-caas-tenant.sh ---------------------------------------------------
 
