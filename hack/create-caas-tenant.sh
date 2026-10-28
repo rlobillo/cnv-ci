@@ -136,6 +136,23 @@ function deploy_tenant_cluster() {
 # ---------------------------------------------------------------------------
 # Step 3: wait for installation
 # ---------------------------------------------------------------------------
+# All CAPI machines must reach the Running phase: the AgentClusterInstall
+# can report installed while the machines are still stuck in Provisioning,
+# which leaves the tenant cluster half-deployed.
+function machines_running() {
+    local total running
+    total=$(oc get machines.cluster.x-k8s.io -n "${TENANT_NAMESPACE}" \
+        --no-headers 2>/dev/null | wc -l | tr -d ' ')
+    running=$(oc get machines.cluster.x-k8s.io -n "${TENANT_NAMESPACE}" \
+        -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' 2>/dev/null | wc -w)
+    [ "${total}" -gt 0 ] && [ "${total}" -eq "${running}" ]
+}
+
+function machines_status() {
+    oc get machines.cluster.x-k8s.io -n "${TENANT_NAMESPACE}" \
+        -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\n"}{end}' 2>/dev/null || true
+}
+
 function wait_for_installation() {
     echo "Waiting for AgentClusterInstall to reach installed state"
 
@@ -148,11 +165,15 @@ function wait_for_installation() {
             -n "${TENANT_NAMESPACE}" \
             -o jsonpath='{.status.debugInfo.state}' 2>/dev/null || echo "")
 
-        echo "ACI state: ${state}"
-
         if [[ "${state}" == "installed" || "${state}" == "adding-hosts" ]]; then
-            echo "Installation complete"
-            return 0
+            if machines_running; then
+                echo "Installation complete (ACI: ${state}, all machines Running)"
+                return 0
+            fi
+            echo "ACI state: ${state} — machines not Running yet:"
+            machines_status | sed 's/^/  /'
+        else
+            echo "ACI state: ${state}"
         fi
 
         if [[ "${state}" == "finalizing" && "${finalizing_extended}" == "false" ]]; then
@@ -171,6 +192,8 @@ function wait_for_installation() {
 
         if [[ $(date +%s) -gt ${deadline} ]]; then
             echo "ERROR: Timed out waiting for installation"
+            echo "Machines:"
+            machines_status | sed 's/^/  /'
             return 1
         fi
 
