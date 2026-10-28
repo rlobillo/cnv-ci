@@ -21,8 +21,9 @@
 #   PULL_SECRET         - pull secret JSON (default: extracted from hub openshift-config/pull-secret)
 #   BASE_DOMAIN         - base domain for the tenant cluster (default: from hub ingress)
 #   STORAGE_CLASS       - storage class for VM root disks (default: from hub default SC)
-#   OCP_VERSION         - OpenShift version to install (default: hub version,
-#                         fallback defined in hack/caas.yaml)
+#   OCP_VERSION         - OpenShift version to install (default: the exact
+#                         version the hub runs; set it explicitly only when
+#                         running against a pre-release hub)
 #
 # Defaults for all other tunables (cluster name, namespaces, timeouts, SSH
 # key, manifest paths) are centralized in hack/caas.yaml.
@@ -57,15 +58,18 @@ FINALIZING_TIMEOUT_MIN=$(read_config FINALIZING_TIMEOUT_MIN)
 AGENTSERVICECONFIG_MANIFEST=$(read_config AGENTSERVICECONFIG_MANIFEST)
 TENANT_CLUSTER_MANIFEST=$(read_config TENANT_CLUSTER_MANIFEST)
 
-# OpenShift version to install: env var > hub cluster version > config
-# fallback. Discovery keeps the tenant on the exact same version as the hub
-# (payload and RHCOS stream); pass OCP_VERSION explicitly when running
-# against a pre-release hub.
+# OpenShift version to install: env var > hub cluster version. The tenant
+# always installs the exact version the hub runs (payload and RHCOS
+# stream); set OCP_VERSION explicitly only when running against a
+# pre-release hub.
 OCP_VERSION=${OCP_VERSION:-$(oc get clusterversion version \
     -o jsonpath='{.status.desired.version}' 2>/dev/null || true)}
-OCP_VERSION=${OCP_VERSION:-$(read_config OCP_VERSION)}
+if [ -z "${OCP_VERSION}" ]; then
+    echo "ERROR: could not discover the hub OpenShift version — set OCP_VERSION explicitly" >&2
+    exit 1
+fi
 
-for _key in CLUSTER_NAME TENANT_NAMESPACE ASSISTED_NAMESPACE OCP_VERSION \
+for _key in CLUSTER_NAME TENANT_NAMESPACE ASSISTED_NAMESPACE \
     SSH_AUTHORIZED_KEY INSTALL_TIMEOUT_MIN FINALIZING_TIMEOUT_MIN \
     AGENTSERVICECONFIG_MANIFEST TENANT_CLUSTER_MANIFEST; do
     if [ -z "${!_key}" ]; then

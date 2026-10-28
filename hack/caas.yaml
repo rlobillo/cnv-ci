@@ -54,8 +54,7 @@ AGENTSERVICECONFIG_MANIFEST: "manifests/capoa/agentserviceconfig.yaml"
 # --- create-caas-tenant.sh ---------------------------------------------------
 #
 # Defaults for the tenant cluster creation. The hub cluster is introspected
-# at runtime for PULL_SECRET, BASE_DOMAIN, STORAGE_CLASS and OCP_VERSION
-# (the value below is only the fallback when discovery fails).
+# at runtime for PULL_SECRET, BASE_DOMAIN, STORAGE_CLASS and OCP_VERSION.
 
 # Tenant cluster name and namespace.
 CLUSTER_NAME: "capoa-kubevirt-test"
@@ -63,10 +62,6 @@ TENANT_NAMESPACE: "capoa-kubevirt-test"
 
 # Namespace where assisted-service runs on the hub.
 ASSISTED_NAMESPACE: "assisted-installer"
-
-# Fallback OpenShift version to install when it cannot be discovered from
-# the hub (same RHCOS stream → reuse coreos-bootimages URL).
-OCP_VERSION: "4.22.17"
 
 # SSH public key injected into tenant cluster nodes (cnv-qe-jenkins).
 SSH_AUTHORIZED_KEY: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCj47ubVnxR16JU7ZfDli3N5QVBAwJBRh2xMryyjk5dtfugo5JIPGB2cyXTqEDdzuRmI+Vkb/A5duJyBRlA+9RndGGmhhMnj8and3wu5/cEb7DkF6ZJ25QV4LQx3K/i57LStUHXRTvruHOZ2nCuVXWqi7wSvz5YcvEv7O8pNF5uGmqHlShBdxQxcjurXACZ1YY0YDJDr3AJai1KF9zehVJODuSbrnOYpThVWGjFuFAnNxbtuZ8EOSougN2aYTf2qr/KFGDHtewIkzZmP6cjzKO5bN3pVbXxmb2Gces/BYHntY4MXBTUqwsmsCRC5SAz14bEP/vsLtrNhjq9vCS+BjMT"
