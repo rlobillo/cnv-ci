@@ -60,7 +60,7 @@ NAMESPACE_DELETE_TIMEOUT_MIN=$(read_config NAMESPACE_DELETE_TIMEOUT_MIN)
 PV_DELETE_TIMEOUT_MIN=$(read_config PV_DELETE_TIMEOUT_MIN)
 RBD_RECLAIM_TIMEOUT_MIN=$(read_config RBD_RECLAIM_TIMEOUT_MIN)
 
-for _key in TENANT_NAMESPACE ODF_NAMESPACE RBD_POOL CEPH_TOOLBOX_IMAGE \
+for _key in TENANT_NAMESPACE ODF_NAMESPACE RBD_POOL \
     NAMESPACE_DELETE_TIMEOUT_MIN PV_DELETE_TIMEOUT_MIN RBD_RECLAIM_TIMEOUT_MIN; do
     if [ -z "${!_key}" ]; then
         echo "ERROR: ${_key} is not set and was not found in ${CONFIG_FILE}" >&2
@@ -88,16 +88,21 @@ trap teardown EXIT
 # wait_until <timeout_seconds> <description> <command...>
 # Returns 0 as soon as the command succeeds, 1 on timeout.
 function wait_until() {
-    local deadline=$(( $(date +%s) + $1 )); shift
+    local timeout_s="$1"; shift
     local desc="$1"; shift
+    local deadline=$(( $(date +%s) + timeout_s ))
+    echo "Waiting up to $(( timeout_s / 60 ))m for ${desc} (polling every 10s)"
     while true; do
         if "$@" >/dev/null 2>&1; then
+            echo "  done"
             return 0
         fi
         if [ "$(date +%s)" -ge "${deadline}" ]; then
+            echo ""
             echo "WARN: timed out waiting for ${desc}"
             return 1
         fi
+        printf '.'
         sleep 10
     done
 }
@@ -107,7 +112,7 @@ function wait_until() {
 # ---------------------------------------------------------------------------
 function capture_tenant_volumes() {
     echo "=== Capturing tenant PV volume handles ==="
-    local ns_filter="\.spec\.claimRef\.namespace==\"${TENANT_NAMESPACE}\""
+    local ns_filter=".spec.claimRef.namespace==\"${TENANT_NAMESPACE}\""
     oc get pv -o jsonpath="{range .items[?(@${ns_filter})]}{.metadata.name}{\"\n\"}{end}" \
         2>/dev/null | grep -v '^$' > "${WORK_DIR}/tenant-pvs.txt" || true
     oc get pv -o jsonpath="{range .items[?(@${ns_filter})]}{.spec.csi.volumeHandle}{\"\n\"}{end}" \
@@ -118,22 +123,26 @@ function capture_tenant_volumes() {
 # ---------------------------------------------------------------------------
 # Step 2: delete tenant VMs, namespace, pods and blocking finalizers
 # ---------------------------------------------------------------------------
+# Resources whose finalizers commonly block namespace termination. Leaf
+# resources first, Cluster last (CAPI re-adds Cluster finalizers while its
+# dependents are still alive).
+STRIP_RESOURCES=(
+    agents.agent-install.openshift.io
+    infraenvs.agent-install.openshift.io
+    agentclusterinstalls.extensions.hive.openshift.io
+    openshiftassistedcontrolplanes.controlplane.cluster.x-k8s.io
+    machinedeployments.cluster.x-k8s.io
+    machines.cluster.x-k8s.io
+    kubevirtmachines.infrastructure.cluster.x-k8s.io
+    kubevirtmachinetemplates.infrastructure.cluster.x-k8s.io
+    kubevirtclusters.infrastructure.cluster.x-k8s.io
+    clusters.cluster.x-k8s.io
+)
+
 function strip_finalizers() {
-    # Leaf resources first, Cluster last (CAPI re-adds Cluster finalizers
-    # while its dependents are still alive).
-    local resources=(
-        agents.agent-install.openshift.io
-        infraenvs.agent-install.openshift.io
-        agentclusterinstalls.extensions.hive.openshift.io
-        openshiftassistedcontrolplanes.controlplane.cluster.x-k8s.io
-        machinedeployments.cluster.x-k8s.io
-        kubevirtmachinetemplates.infrastructure.cluster.x-k8s.io
-        kubevirtclusters.infrastructure.cluster.x-k8s.io
-        clusters.cluster.x-k8s.io
-    )
     local pass res name stripped=false
     for pass in 1 2; do
-        for res in "${resources[@]}"; do
+        for res in "${STRIP_RESOURCES[@]}"; do
             while read -r name; do
                 [ -z "${name}" ] && continue
                 echo "  stripping finalizers: ${name}"
@@ -177,7 +186,9 @@ function delete_tenant() {
     echo "=== Waiting for namespace to disappear ==="
     if ! wait_until $(( NAMESPACE_DELETE_TIMEOUT_MIN * 60 )) "namespace deletion" \
         bash -c "! oc get namespace ${TENANT_NAMESPACE} &>/dev/null"; then
-        echo "WARN: namespace ${TENANT_NAMESPACE} is still terminating — continuing anyway"
+        echo "WARN: namespace ${TENANT_NAMESPACE} is still terminating. Resources still alive:"
+        oc get "${STRIP_RESOURCES[@]}" -n "${TENANT_NAMESPACE}" --no-headers 2>/dev/null || true
+        echo "WARN: continuing anyway"
     fi
 }
 
@@ -203,6 +214,9 @@ function wait_tenant_pvs_gone() {
 function unmap_stale_krbd() {
     local images="$1"
     [ -n "${images}" ] || return 0
+    # Flatten to a single line: the list is inlined into a remote bash -c
+    # script below and embedded newlines break its parsing.
+    images=$(tr '\n' ' ' <<< "${images}")
     echo "=== Force-unmapping stale krbd devices ==="
     local node
     while read -r node; do
@@ -259,6 +273,20 @@ function setup_toolbox() {
     fi
 
     echo "Creating temporary ceph toolbox pod"
+    # Reuse the exact image the ceph mons run when CEPH_TOOLBOX_IMAGE is not
+    # set: it is guaranteed to be pullable on the hub. A digest pinned in the
+    # config gets purged from the registry over time, leaving the pull
+    # hanging forever without any error event.
+    local toolbox_image="${CEPH_TOOLBOX_IMAGE}"
+    if [ -z "${toolbox_image}" ]; then
+        toolbox_image=$(oc get pods -n "${ODF_NAMESPACE}" -l app=rook-ceph-mon \
+            -o jsonpath='{.items[0].spec.containers[0].image}' 2>/dev/null || true)
+    fi
+    if [ -z "${toolbox_image}" ]; then
+        echo "ERROR: could not determine a ceph toolbox image" >&2
+        return 1
+    fi
+    echo "  toolbox image: ${toolbox_image}"
     oc delete pod "${TOOLBOX_NAME}" -n "${ODF_NAMESPACE}" \
         --ignore-not-found --wait=false &>/dev/null || true
 
@@ -289,7 +317,7 @@ spec:
   restartPolicy: Never
   containers:
   - name: toolbox
-    image: ${CEPH_TOOLBOX_IMAGE}
+    image: ${toolbox_image}
     command: ["sleep", "7200"]
     volumeMounts:
     - name: admin-keyring
@@ -300,8 +328,10 @@ spec:
       secretName: rook-ceph-admin-keyring
 EOF
     TOOLBOX_CREATED=true
+    # First pull of the rhceph toolbox image (~1.2 GiB) can take several
+    # minutes on a fresh cluster — give it room before failing.
     oc wait pod "${TOOLBOX_NAME}" -n "${ODF_NAMESPACE}" \
-        --for=condition=Ready --timeout=180s
+        --for=condition=Ready --timeout=600s
 
     toolbox_cmd "printf '[global]\nmon_host = ${mon_hosts}\n[client.admin]\nkeyring = /etc/ceph/admin/keyring\n' > /etc/ceph/ceph.conf"
     toolbox_cmd "ceph -s" >/dev/null
@@ -444,10 +474,12 @@ echo "Tenant namespace: ${TENANT_NAMESPACE} | ODF pool: ${RBD_POOL}"
 
 capture_tenant_volumes
 delete_tenant
-wait_tenant_pvs_gone
 
-# Unmap the tenant krbd devices so the CSI can finish the reclamation.
+# Unmap the tenant krbd devices first: stale mappings are what keeps the
+# CSI from deleting the tenant PVs and images.
 unmap_stale_krbd "$(tenant_unmap_list)"
+
+wait_tenant_pvs_gone
 
 if ! setup_toolbox; then
     echo "ERROR: no ceph toolbox available — cannot verify the cleanup" >&2

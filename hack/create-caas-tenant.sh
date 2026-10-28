@@ -57,11 +57,12 @@ FINALIZING_TIMEOUT_MIN=$(read_config FINALIZING_TIMEOUT_MIN)
 AGENTSERVICECONFIG_MANIFEST=$(read_config AGENTSERVICECONFIG_MANIFEST)
 TENANT_CLUSTER_MANIFEST=$(read_config TENANT_CLUSTER_MANIFEST)
 
-# OpenShift version to install: env var > hub cluster version > config
-# fallback (matches the hub RHCOS stream → reuse coreos-bootimages URL).
+# OpenShift version to install: env var > caas.yaml > hub cluster version.
+# caas.yaml takes precedence over hub autodiscovery so that a hub running a
+# pre-release (e.g. 5.0-rc) does not silently override an explicit config.
+OCP_VERSION=${OCP_VERSION:-$(read_config OCP_VERSION)}
 OCP_VERSION=${OCP_VERSION:-$(oc get clusterversion version \
     -o jsonpath='{.status.desired.version}' 2>/dev/null || true)}
-OCP_VERSION=${OCP_VERSION:-$(read_config OCP_VERSION)}
 
 for _key in CLUSTER_NAME TENANT_NAMESPACE ASSISTED_NAMESPACE OCP_VERSION \
     SSH_AUTHORIZED_KEY INSTALL_TIMEOUT_MIN FINALIZING_TIMEOUT_MIN \
@@ -119,23 +120,7 @@ function deploy_tenant_cluster() {
     INFRA_KUBECONFIG_B64=$(base64 -w0 < "${KUBECONFIG}")
     set -x
 
-    # Pre-create RHCOS URL ConfigMap from hub's coreos-bootimages to bypass
-    # the private image resolution job (ocp-v4.0-art-dev is Red Hat internal only).
-    local rhcos_url
-    rhcos_url=$(oc get configmap coreos-bootimages \
-        -n openshift-machine-config-operator \
-        -o jsonpath='{.data.stream}' \
-        | python3 -c "import sys,json; d=json.load(sys.stdin); \
-          print(d['architectures']['x86_64']['artifacts']['kubevirt']['formats']['ociarchive']['disk']['location'])")
-
-    echo "RHCOS kubevirt URL: ${rhcos_url}"
-
     oc create namespace "${TENANT_NAMESPACE}" --dry-run=client -o yaml | oc apply -f -
-
-    oc create configmap "capoa-rhcos-url-${OCP_MAJOR_MINOR}" \
-        -n "${TENANT_NAMESPACE}" \
-        --from-literal="qcow2-url=${rhcos_url}" \
-        --dry-run=client -o yaml | oc apply -f -
 
     export CLUSTER_NAME TENANT_NAMESPACE OCP_VERSION OCP_MAJOR_MINOR BASE_DOMAIN \
            STORAGE_CLASS SSH_AUTHORIZED_KEY PULL_SECRET_B64 INFRA_KUBECONFIG_B64
@@ -198,6 +183,12 @@ function get_tenant_kubeconfig() {
         -n "${TENANT_NAMESPACE}" \
         -o jsonpath='{.data.kubeconfig}' \
         | base64 -d > "${kubeconfig_path}"
+
+    # The generated kubeconfig points at the tenant API on port 6443, but in
+    # pod-networking mode the API is exposed through a hub Route, served on
+    # port 443 (SNI passthrough to the service port 6443). Strip the port so
+    # the kubeconfig also works from outside the hub.
+    sed -i 's|:6443$||' "${kubeconfig_path}"
 
     echo "${kubeconfig_path}"
 }

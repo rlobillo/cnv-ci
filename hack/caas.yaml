@@ -93,9 +93,11 @@ ODF_NAMESPACE: "openshift-storage"
 RBD_POOL: "ocs-storagecluster-cephblockpool"
 
 # Image for the temporary ceph toolbox pod created when no rook-ceph-tools
-# deployment exists (must contain the ceph/rbd CLI; pulled with the hub
-# cluster pull secret).
-CEPH_TOOLBOX_IMAGE: "registry.redhat.io/rhceph/rhceph-9-rhel9@sha256:24cbdc19397726aa75f21a253ee351d2c8a983fcc4c528c1894668adfde657bc"
+# deployment exists (must contain the ceph/rbd CLI). Empty (default) reuses
+# the exact image the ceph mons run, which is guaranteed to be pullable on
+# the hub — pinned digests get purged from the registry over time and leave
+# the pod pull hanging forever.
+CEPH_TOOLBOX_IMAGE: ""
 
 # Minutes to wait for the tenant namespace and its PVs to disappear before
 # forcing the cleanup.
