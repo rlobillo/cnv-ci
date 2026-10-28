@@ -148,9 +148,22 @@ function machines_running() {
     [ "${total}" -gt 0 ] && [ "${total}" -eq "${running}" ]
 }
 
+# Dumps the Machine -> KubevirtMachine -> VMI chain so a stuck wait shows
+# exactly which link broke: Machine -> KubevirtMachine -> VMI/pod on the
+# hub -> VM -> node in the tenant.
 function machines_status() {
+    echo "machines:"
     oc get machines.cluster.x-k8s.io -n "${TENANT_NAMESPACE}" \
-        -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\n"}{end}' 2>/dev/null || true
+        -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,READY:.status.ready \
+        --no-headers 2>/dev/null || true
+    echo "kubevirtmachines:"
+    oc get kubevirtmachines.infrastructure.cluster.x-k8s.io -n "${TENANT_NAMESPACE}" \
+        -o custom-columns=NAME:.metadata.name,READY:.status.ready,ADDRESS:.status.addresses[0].address \
+        --no-headers 2>/dev/null || true
+    echo "vmis:"
+    oc get vmis.kubevirt.io -n "${TENANT_NAMESPACE}" \
+        -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,NODE:.status.nodeName \
+        --no-headers 2>/dev/null || true
 }
 
 function wait_for_installation() {
