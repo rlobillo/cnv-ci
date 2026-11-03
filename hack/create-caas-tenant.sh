@@ -41,7 +41,9 @@
 # the epic's first user story). Hub-level discovery and the assisted-service
 # readiness check still run with the original (cluster-admin) kubeconfig
 # before switching. Set TENANT_ADMIN_USER="" for the legacy cluster-admin
-# flow. Requires the 'htpasswd' binary.
+# flow. Requires only 'openssl' (present in the Prow image): 'htpasswd' is
+# not, so the user's password hash is generated with 'openssl passwd -apr1'
+# (an $apr1$ hash, which the HTPasswd IDP accepts alongside bcrypt).
 #
 # NOTE: this script assumes the deployment already made the CAPI/CAPOA
 # custom resources available to namespace admins (standalone:
@@ -192,12 +194,6 @@ function setup_tenant_admin_user() {
         return 0
     fi
 
-    command -v htpasswd &>/dev/null || {
-        echo "ERROR: 'htpasswd' binary not found (httpd-tools package); required" >&2
-        echo "       to create the project-admin user. Install it or set TENANT_ADMIN_USER=\"\"" >&2
-        exit 1
-    }
-
     echo "=== Setting up project-admin user '${TENANT_ADMIN_USER}' ==="
 
     # The namespace must be created (and Active) with cluster-admin rights.
@@ -220,9 +216,18 @@ function setup_tenant_admin_user() {
             -o jsonpath='{.data.htpasswd}' | base64 -d > "${htpasswd_file}" || true
         sed -i "/^${TENANT_ADMIN_USER}:/d" "${htpasswd_file}"
     fi
-    # The password must not leak into the trace (CI build logs).
+    # The password must not leak into the trace (CI build logs). The
+    # 'htpasswd' binary is not available in the Prow image, so openssl
+    # generates the hash instead: 'openssl passwd -apr1' produces an $apr1$
+    # hash (fresh random salt on every call) that the HTPasswd IDP accepts
+    # alongside bcrypt.
     set +x
-    htpasswd -bnBC 10 "${TENANT_ADMIN_USER}" "${TENANT_ADMIN_PASSWORD}" >> "${htpasswd_file}"
+    local password_hash
+    password_hash=$(openssl passwd -apr1 "${TENANT_ADMIN_PASSWORD}") || {
+        echo "ERROR: 'openssl passwd -apr1' failed to hash the password" >&2
+        exit 1
+    }
+    printf '%s:%s\n' "${TENANT_ADMIN_USER}" "${password_hash}" >> "${htpasswd_file}"
     set -x
     oc create secret generic "${idp_name}" -n openshift-config \
         --from-file=htpasswd="${htpasswd_file}" \

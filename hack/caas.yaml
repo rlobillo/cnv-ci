@@ -115,8 +115,10 @@ DAY2_WORKERS_READY_TIMEOUT_MIN: "90"
 # by the deployment: standalone does it in deploy-caas-standalone.sh
 # (manager-role aggregation workaround); MCE is expected to ship proper
 # aggregate roles (product gap, pending upstream).
-# Set to "" to keep the legacy cluster-admin flow. Requires the 'htpasswd'
-# binary.
+# Set to "" to keep the legacy cluster-admin flow. Requires only 'openssl':
+# 'htpasswd' is not available in the Prow image, so the password hash is
+# generated with 'openssl passwd -apr1' ($apr1$, accepted by the HTPasswd
+# IDP).
 TENANT_ADMIN_USER: "tenant-admin"
 
 # Password for the project-admin user. Auto-generated (random) when empty;
