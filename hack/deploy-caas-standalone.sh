@@ -259,6 +259,12 @@ function install_assisted_service() {
     # AgentServiceConfig — triggers assisted-service deployment
     oc apply -f "${REPO_DIR}/${AGENTSERVICECONFIG_MANIFEST}"
 
+    # The infrastructure-operator reconciles the AgentServiceConfig asynchronously.
+    # Retry until the Deployment exists; `oc wait` fails immediately with NotFound
+    # if it is called before that reconcile creates the resource.
+    "${SCRIPT_DIR}/retry.sh" 30 10 \
+        "oc get deployment assisted-service -n assisted-installer"
+
     oc wait deployment assisted-service \
         -n assisted-installer \
         --for=condition=Available \
