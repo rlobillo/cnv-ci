@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Delete a CAAS tenant cluster from the hub.
+# Delete a CAAS nested cluster from the infra cluster.
 #
 # Deleting the tenant namespace is all it should take: the Kubernetes
 # garbage collector and the CAPI/assisted controllers tear down the whole
@@ -15,13 +15,12 @@
 # operations): a stuck cleanup means something upstream did not work, and
 # how to handle it is a human decision.
 #
-# Optional env vars (defaults from hack/caas.yaml, env var wins):
+# Optional env vars (defaults from hack/caas/caas.yaml, env var wins):
 #   TENANT_NAMESPACE, NAMESPACE_DELETE_TIMEOUT_MIN, PV_DELETE_TIMEOUT_MIN
 
 set -euo pipefail
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-REPO_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
 CONFIG_FILE="${SCRIPT_DIR}/caas.yaml"
 
 # Reads a configuration key from ${CONFIG_FILE}; an environment variable

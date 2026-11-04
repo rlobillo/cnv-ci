@@ -1,4 +1,4 @@
-# AgentServiceConfig deployed by deploy-caas-standalone.sh.
+# CAAS AgentServiceConfig deployed by hack/caas/deploy-caas-infra-standalone.sh.
 # Triggers the assisted-service deployment on the hub cluster.
 #
 # enable-image-service: "false" — CAPOA handles OS image delivery for

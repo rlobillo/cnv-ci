@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Deploy CAPOA providers + CAPK + assisted-service in standalone mode on an OCP+CNV hub cluster.
+# Deploy CAPOA providers + CAPK + assisted-service in standalone mode on an OCP+CNV infra cluster.
 #
 # Runs in Prow CI without root. oc/kubectl are provided by the CI environment.
 # clusterctl is downloaded at runtime to /tmp/bin.
 #
 # All versions and external references are centralized in
-# hack/caas.yaml. Every key defined there can be overridden
+# hack/caas/caas.yaml. Every key defined there can be overridden
 # through a same-named environment variable:
 #   CAPI_VERSION, CAPK_VERSION, CERT_MANAGER_VERSION, ASSISTED_SERVICE_TAG,
 #   ASSISTED_SERVICE_CRD_PATHS, ASSISTED_SERVICE_KUSTOMIZE_PATH,
@@ -21,12 +21,12 @@
 # CAPOA is installed with oc apply from git manifests, NOT via clusterctl:
 # CAPOA releases ship a stale metadata.yaml (releaseSeries only covers the
 # old 0.1 series) that makes "clusterctl init" fail for any newer release.
-# See hack/caas.yaml for details.
+# See hack/caas/caas.yaml for details.
 
 set -euxo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-REPO_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
+REPO_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd)
 CONFIG_FILE="${SCRIPT_DIR}/caas.yaml"
 
 # Reads a configuration key from ${CONFIG_FILE}; an environment variable
@@ -262,7 +262,7 @@ function install_assisted_service() {
     # The infrastructure-operator reconciles the AgentServiceConfig asynchronously.
     # Retry until the Deployment exists; `oc wait` fails immediately with NotFound
     # if it is called before that reconcile creates the resource.
-    "${SCRIPT_DIR}/retry.sh" 30 10 \
+    "${SCRIPT_DIR}/../retry.sh" 30 10 \
         "oc get deployment assisted-service -n assisted-installer"
 
     oc wait deployment assisted-service \
@@ -294,7 +294,7 @@ function install_assisted_service() {
 # project-admin user cannot create Cluster/OACP/KubevirtCluster objects in
 # their namespace (PoC findings 5.1). Labeling the manager roles with the
 # aggregation label merges their permissions into the built-in 'admin'
-# ClusterRole, which create-caas-tenant.sh binds to the project-admin user.
+# ClusterRole, which create-nested-cluster.sh binds to the project-admin user.
 #
 # The MCE integration is expected to provide this properly instead (MCE
 # already ships multicluster-engine:assisted-installer:admin-aggregate for
@@ -304,7 +304,7 @@ function install_assisted_service() {
 #
 # NOTE: this over-grants by design — the manager roles carry cluster-scoped
 # and sensitive permissions that namespace admins should not have.
-# Acceptable on disposable QE hubs only.
+# Acceptable on disposable QE infra clusters only.
 function aggregate_manager_roles() {
     echo "=== Aggregating provider manager roles into 'admin' ==="
     for role in capi-manager-role capk-manager-role \

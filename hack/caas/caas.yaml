@@ -1,8 +1,8 @@
 # Unified configuration for the CAAS standalone deployment and tenant
 # lifecycle scripts.
 #
-# All versions and external references used by deploy-caas-standalone.sh,
-# create-caas-tenant.sh and delete-caas-tenant.sh are defined here. Each key can be overridden through a same-named environment
+# All versions and external references used by deploy-caas-infra-standalone.sh,
+# create-nested-cluster.sh and delete-nested-cluster.sh are defined here. Each key can be overridden through a same-named environment
 # variable. This file is also passed to clusterctl (--config): keys that
 # clusterctl does not interpret are treated as variable-substitution values,
 # which is harmless.
@@ -17,7 +17,7 @@
 # Cluster API version. Pins both the clusterctl binary downloaded by the
 # script and the core provider installed by "clusterctl init".
 # Supported specifiers (resolved at deploy time via git ls-remote, see
-# resolve_version in deploy-caas-standalone.sh):
+# resolve_version in deploy-caas-infra-standalone.sh):
 #   "v1.11.3"  exact release tag
 #   "v1.11"    series track: latest patch release of the v1.11 series
 #   "latest"   newest stable release
@@ -64,20 +64,20 @@ CAPOA_BOOTSTRAP_MANIFEST: "test/e2e/manifests/capboa/bootstrap_install.yaml"
 CAPOA_CTRL_IMAGE: "quay.io/edge-infrastructure/cluster-api-controlplane-provider-openshift-assisted:latest"
 CAPOA_BOOT_IMAGE: "quay.io/edge-infrastructure/cluster-api-bootstrap-provider-openshift-assisted:latest"
 
-# AgentServiceConfig manifest applied by deploy-caas-standalone.sh and
-# create-caas-tenant.sh (relative to the repository root).
-AGENTSERVICECONFIG_MANIFEST: "manifests/capoa/agentserviceconfig.yaml"
+# AgentServiceConfig manifest applied by deploy-caas-infra-standalone.sh and
+# create-nested-cluster.sh (relative to the repository root).
+AGENTSERVICECONFIG_MANIFEST: "manifests/caas/agentserviceconfig.yaml"
 
-# --- create-caas-tenant.sh ---------------------------------------------------
+# --- create-nested-cluster.sh ------------------------------------------------
 #
-# Defaults for the tenant cluster creation. The hub cluster is introspected
+# Defaults for the nested cluster creation. The infra cluster is introspected
 # at runtime for PULL_SECRET, BASE_DOMAIN, STORAGE_CLASS and OCP_VERSION.
 
-# Tenant cluster name and namespace.
-CLUSTER_NAME: "capoa-kubevirt-test"
-TENANT_NAMESPACE: "capoa-kubevirt-test"
+# Nested cluster resource name and infra project namespace; they may differ.
+NESTED_CLUSTER_NAME: "caas-cluster"
+TENANT_NAMESPACE: "caas-project"
 
-# Namespace where assisted-service runs on the hub.
+# Namespace where assisted-service runs on the infra cluster.
 ASSISTED_NAMESPACE: "assisted-installer"
 
 # SSH public key injected into tenant cluster nodes (cnv-qe-jenkins).
@@ -89,11 +89,13 @@ SSH_AUTHORIZED_KEY: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCj47ubVnxR16JU7ZfDli3
 INSTALL_TIMEOUT_MIN: "90"
 FINALIZING_TIMEOUT_MIN: "30"
 
-# Tenant cluster manifest, rendered with envsubst (relative to the
-# repository root).
-TENANT_CLUSTER_MANIFEST: "manifests/capoa/kubevirt-tenant-cluster.yaml"
+# Nested cluster manifest, rendered with envsubst (relative to the repository
+# root).
+NESTED_CLUSTER_MANIFEST: "manifests/caas/nested-cluster.yaml"
+# Day-2 worker manifest, rendered with envsubst (relative to the repository root).
+WORKERS_MANIFEST: "manifests/caas/nested-cluster-workers.yaml"
 
-# StorageClass on the hub used by the KubeVirt CSI driver for tenant PVCs
+# StorageClass on the infra cluster used by the KubeVirt CSI driver for nested-cluster PVCs
 # and by the RHCOS golden PVC (csiDriver.infraStorageClass in the OACP).
 # Must be RBD-based and support Block volume mode. Default: the ODF
 # storageclass created alongside OpenShift Virtualization.
@@ -106,13 +108,13 @@ DAY2_WORKERS_READY_TIMEOUT_MIN: "90"
 
 # --- project-admin mode ------------------------------------------------------
 #
-# create-caas-tenant.sh provisions the tenant as this user: it is created
+# create-nested-cluster.sh provisions the nested cluster as this user: it is created
 # (htpasswd IDP), granted the built-in 'admin' role in the tenant namespace,
 # and a kubeconfig is generated for it and used for every subsequent step —
 # including the infra-cluster-credentials secret, which then carries the
 # project-admin kubeconfig (the topology promised by the epic's first user
 # story). The CAPI/CAPOA resources must already be aggregated into 'admin'
-# by the deployment: standalone does it in deploy-caas-standalone.sh
+# by the deployment: standalone does it in deploy-caas-infra-standalone.sh
 # (manager-role aggregation workaround); MCE is expected to ship proper
 # aggregate roles (product gap, pending upstream).
 # Set to "" to keep the legacy cluster-admin flow. Requires only 'openssl':
@@ -125,7 +127,7 @@ TENANT_ADMIN_USER: "tenant-admin"
 # written to ${ARTIFACT_DIR}/tenant-admin-credentials.txt.
 TENANT_ADMIN_PASSWORD: ""
 
-# --- delete-caas-tenant.sh ---------------------------------------------------
+# --- delete-nested-cluster.sh ------------------------------------------------
 
 # Minutes to wait for the tenant namespace and its PVs to disappear before
 # the script reports a failed cleanup. Generous on purpose: a false

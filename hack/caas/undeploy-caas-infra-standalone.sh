@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Uninstall everything deployed by deploy-caas-standalone.sh and
-# create-caas-tenant.sh.
+# Uninstall everything deployed by deploy-caas-infra-standalone.sh and
+# create-nested-cluster.sh.
 #
 # Removes: standalone assisted-service (AgentServiceConfig and the
 # infrastructure-operator namespace), CAPOA providers, CAPK, standalone
@@ -8,24 +8,24 @@
 # Does NOT touch MCE or any MCE-managed components.
 #
 # The tenant cluster itself (namespace, VMs, RBD images) is removed by
-# delete-caas-tenant.sh — run that first; this script only tears down the
-# hub-side providers.
+# hack/caas/delete-nested-cluster.sh — run that first; this script only tears down the
+# infra-side providers.
 #
 # Optional env vars:
-#   TENANT_NAMESPACE    - tenant namespace checked for leftovers (default: capoa-kubevirt-test)
+#   TENANT_NAMESPACE    - infra project namespace checked for leftovers (default: caas-project)
 #   SKIP_CERT_MANAGER   - set to "true" to keep cert-manager (default: false)
 
 set -euxo pipefail
 
-TENANT_NAMESPACE=${TENANT_NAMESPACE:-capoa-kubevirt-test}
+TENANT_NAMESPACE=${TENANT_NAMESPACE:-caas-project}
 SKIP_CERT_MANAGER=${SKIP_CERT_MANAGER:-false}
 
 # ---------------------------------------------------------------------------
-# Tenant cluster — must be removed by delete-caas-tenant.sh first
+# Nested cluster — must be removed by hack/caas/delete-nested-cluster.sh first
 # ---------------------------------------------------------------------------
 if oc get namespace "${TENANT_NAMESPACE}" &>/dev/null; then
     echo "WARNING: tenant namespace ${TENANT_NAMESPACE} still exists."
-    echo "         Run hack/delete-caas-tenant.sh first — it also verifies that the"
+    echo "         Run hack/caas/delete-nested-cluster.sh first — it also verifies that the"
     echo "         RBD images backing the tenant VM disks were reclaimed."
 fi
 
@@ -38,13 +38,13 @@ if ! oc get deployment assisted-service -n multicluster-engine &>/dev/null; then
     oc delete agentserviceconfig agent --ignore-not-found
     # The standalone install also leaves the infrastructure-operator and its
     # namespace behind (the kustomize hardcodes assisted-installer) — remove
-    # them too so the teardown matches what deploy-caas-standalone.sh
+    # them too so the teardown matches what deploy-caas-infra-standalone.sh
     # installed.
     oc delete namespace assisted-installer --ignore-not-found --wait=false
 fi
 
 # ---------------------------------------------------------------------------
-# Manager-role aggregation — undo what deploy-caas-standalone.sh applied
+# Manager-role aggregation — undo what hack/caas/deploy-caas-infra-standalone.sh applied
 # ---------------------------------------------------------------------------
 # The standalone deploy labels the provider manager ClusterRoles with
 # rbac.authorization.k8s.io/aggregate-to-admin (workaround so project-admin
@@ -134,7 +134,7 @@ fi
 #   status.storedVersions[0]: Invalid value: "v1beta2": missing from
 #   spec.versions; v1beta2 was previously a storage version, and must
 #   remain in spec.versions until a storage migration...
-# which permanently blocks hub upgrades ("Could not update
+# which permanently blocks infra upgrades ("Could not update
 # customresourcedefinition ipaddressclaims..." in clusterversion).
 #
 # Deleting the empty CRDs resolves the conflict: the CVO recreates the

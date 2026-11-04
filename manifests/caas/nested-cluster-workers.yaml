@@ -1,8 +1,8 @@
-# Worker pool for the CAPOA+KubeVirt tenant cluster (day-2 scaling).
+# Worker pool for the CAAS nested cluster (day-2 scaling).
 #
-# Rendered with envsubst using the same variables as the tenant cluster
-# manifest: CLUSTER_NAME, TENANT_NAMESPACE, OCP_MAJOR_MINOR,
-# STORAGE_CLASS and DAY2_WORKERS_COUNT (see hack/caas.yaml).
+# Rendered with envsubst using the same variables as the nested cluster
+# manifest: NESTED_CLUSTER_NAME, TENANT_NAMESPACE, OCP_MAJOR_MINOR,
+# STORAGE_CLASS and DAY2_WORKERS_COUNT (see hack/caas/caas.yaml).
 #
 # Apply once the compact control plane is installed (ACI in
 # adding-hosts): each machine registers as a new agent and joins the
@@ -11,7 +11,7 @@
 apiVersion: bootstrap.cluster.x-k8s.io/v1alpha2
 kind: OpenshiftAssistedConfigTemplate
 metadata:
-  name: ${CLUSTER_NAME}-workers
+  name: ${NESTED_CLUSTER_NAME}-workers
   namespace: ${TENANT_NAMESPACE}
 spec:
   template:
@@ -22,7 +22,7 @@ spec:
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
 metadata:
-  name: ${CLUSTER_NAME}-workers
+  name: ${NESTED_CLUSTER_NAME}-workers
   namespace: ${TENANT_NAMESPACE}
 spec:
   template:
@@ -80,28 +80,28 @@ spec:
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: MachineDeployment
 metadata:
-  name: ${CLUSTER_NAME}-workers
+  name: ${NESTED_CLUSTER_NAME}-workers
   namespace: ${TENANT_NAMESPACE}
 spec:
-  clusterName: ${CLUSTER_NAME}
+  clusterName: ${NESTED_CLUSTER_NAME}
   replicas: ${DAY2_WORKERS_COUNT}
   selector:
     matchLabels:
-      cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
-      cluster.x-k8s.io/deployment-name: ${CLUSTER_NAME}-workers
+      cluster.x-k8s.io/cluster-name: ${NESTED_CLUSTER_NAME}
+      cluster.x-k8s.io/deployment-name: ${NESTED_CLUSTER_NAME}-workers
   template:
     metadata:
       labels:
-        cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
-        cluster.x-k8s.io/deployment-name: ${CLUSTER_NAME}-workers
+        cluster.x-k8s.io/cluster-name: ${NESTED_CLUSTER_NAME}
+        cluster.x-k8s.io/deployment-name: ${NESTED_CLUSTER_NAME}-workers
     spec:
-      clusterName: ${CLUSTER_NAME}
+      clusterName: ${NESTED_CLUSTER_NAME}
       bootstrap:
         configRef:
           apiGroup: bootstrap.cluster.x-k8s.io
           kind: OpenshiftAssistedConfigTemplate
-          name: ${CLUSTER_NAME}-workers
+          name: ${NESTED_CLUSTER_NAME}-workers
       infrastructureRef:
         apiGroup: infrastructure.cluster.x-k8s.io
         kind: KubevirtMachineTemplate
-        name: ${CLUSTER_NAME}-workers
+        name: ${NESTED_CLUSTER_NAME}-workers

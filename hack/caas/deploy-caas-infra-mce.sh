@@ -11,5 +11,5 @@
 #
 # See epic CNV-93135 for tracking.
 
-echo "ERROR: deploy-caas-mce.sh is not implemented yet (Phase 2, blocked upstream)" >&2
+echo "ERROR: deploy-caas-infra-mce.sh is not implemented yet (Phase 2, blocked upstream)" >&2
 exit 1

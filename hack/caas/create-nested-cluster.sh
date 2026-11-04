@@ -1,35 +1,35 @@
 #!/usr/bin/env bash
-# Deploy a CAAS tenant cluster on the hub and smoke-check it.
+# Deploy a CAAS nested cluster on the infra cluster and smoke-check it.
 #
-# Assumes deploy-caas-standalone.sh already ran successfully
+# Assumes deploy-caas-infra-standalone.sh already ran successfully
 # (CAPI+CAPK+CAPOA ready).
 #
 # What it does:
 #   1. ensure AgentServiceConfig + assisted-service ready
 #   2. apply the tenant cluster manifest
 #   3. wait for the AgentClusterInstall to reach "installed"
-#   4. extract the tenant kubeconfig into ARTIFACT_DIR
+#   4. extract the nested-cluster kubeconfig into ARTIFACT_DIR
 #   5. smoke-check the tenant cluster (oc get nodes)
 #
 # Nothing else: conformance runs and tenant deletion are driven by separate
-# Prow steps (see delete-caas-tenant.sh).
+# Prow steps (see delete-nested-cluster.sh).
 #
 # Required env vars:
 #   ARTIFACT_DIR        - directory for the tenant kubeconfig and logs (set by Prow)
 #
-# Optional env vars (auto-discovered from the hub cluster if not set):
-#   PULL_SECRET         - pull secret JSON (default: extracted from hub openshift-config/pull-secret)
-#   BASE_DOMAIN         - base domain for the tenant cluster (default: from hub ingress)
-#   STORAGE_CLASS       - storage class for VM root disks (default: from hub default SC)
+# Optional env vars (auto-discovered from the infra cluster if not set):
+#   PULL_SECRET         - pull secret JSON (default: extracted from infra openshift-config/pull-secret)
+#   BASE_DOMAIN         - base domain for the nested cluster (default: from infra ingress)
+#   STORAGE_CLASS       - storage class for VM root disks (default: from infra default SC)
 #   OCP_VERSION         - OpenShift version to install (default: the exact
-#                         version the hub runs; set it explicitly only when
-#                         running against a pre-release hub)
+#                         version the infra cluster runs; set it explicitly
+#                         only when running against a pre-release infra cluster)
 #
 # Defaults for all other tunables (cluster name, namespaces, timeouts, SSH
-# key, manifest paths) are centralized in hack/caas.yaml.
+# key, manifest paths) are centralized in hack/caas/caas.yaml.
 # Every key defined there can be overridden through a same-named
 # environment variable:
-#   CLUSTER_NAME, TENANT_NAMESPACE, ASSISTED_NAMESPACE, SSH_AUTHORIZED_KEY,
+#   NESTED_CLUSTER_NAME, TENANT_NAMESPACE, ASSISTED_NAMESPACE, SSH_AUTHORIZED_KEY,
 #   INSTALL_TIMEOUT_MIN, FINALIZING_TIMEOUT_MIN, CSI_STORAGE_CLASS,
 #   TENANT_ADMIN_USER, TENANT_ADMIN_PASSWORD
 #
@@ -38,7 +38,7 @@
 # namespace, generates a kubeconfig for it and performs the whole tenant
 # deployment as that user — including the infra-cluster-credentials secret,
 # which then carries the project-admin kubeconfig (the topology promised by
-# the epic's first user story). Hub-level discovery and the assisted-service
+# the epic's first user story). Infra-level discovery and the assisted-service
 # readiness check still run with the original (cluster-admin) kubeconfig
 # before switching. Set TENANT_ADMIN_USER="" for the legacy cluster-admin
 # flow. Requires only 'openssl' (present in the Prow image): 'htpasswd' is
@@ -47,7 +47,7 @@
 #
 # NOTE: this script assumes the deployment already made the CAPI/CAPOA
 # custom resources available to namespace admins (standalone:
-# deploy-caas-standalone.sh aggregates the provider manager roles as a
+# deploy-caas-infra-standalone.sh aggregates the provider manager roles as a
 # workaround; MCE is expected to ship proper aggregate roles). A fail-fast
 # check verifies it after switching to the user kubeconfig. Known product
 # gaps this mode is meant to validate: CAPOA resolves the CDI importer
@@ -59,7 +59,7 @@
 set -euxo pipefail
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-REPO_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
+REPO_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd)
 CONFIG_FILE="${SCRIPT_DIR}/caas.yaml"
 
 # Reads a configuration key from ${CONFIG_FILE}; an environment variable
@@ -73,32 +73,32 @@ function read_config() {
     sed -n "s/^${key}:[[:space:]]*//p" "${CONFIG_FILE}" | tr -d "\"'" | head -n1
 }
 
-CLUSTER_NAME=$(read_config CLUSTER_NAME)
+NESTED_CLUSTER_NAME=$(read_config NESTED_CLUSTER_NAME)
 TENANT_NAMESPACE=$(read_config TENANT_NAMESPACE)
 ASSISTED_NAMESPACE=$(read_config ASSISTED_NAMESPACE)
 SSH_AUTHORIZED_KEY=$(read_config SSH_AUTHORIZED_KEY)
 INSTALL_TIMEOUT_MIN=$(read_config INSTALL_TIMEOUT_MIN)
 FINALIZING_TIMEOUT_MIN=$(read_config FINALIZING_TIMEOUT_MIN)
 AGENTSERVICECONFIG_MANIFEST=$(read_config AGENTSERVICECONFIG_MANIFEST)
-TENANT_CLUSTER_MANIFEST=$(read_config TENANT_CLUSTER_MANIFEST)
+NESTED_CLUSTER_MANIFEST=$(read_config NESTED_CLUSTER_MANIFEST)
 CSI_STORAGE_CLASS=$(read_config CSI_STORAGE_CLASS)
 TENANT_ADMIN_USER=$(read_config TENANT_ADMIN_USER)
 TENANT_ADMIN_PASSWORD=$(read_config TENANT_ADMIN_PASSWORD)
 
-# OpenShift version to install: env var > hub cluster version. The tenant
-# always installs the exact version the hub runs (payload and RHCOS
+# OpenShift version to install: env var > infra cluster version. The nested cluster
+# always installs the exact version the infra cluster runs (payload and RHCOS
 # stream); set OCP_VERSION explicitly only when running against a
-# pre-release hub.
+# pre-release infra cluster.
 OCP_VERSION=${OCP_VERSION:-$(oc get clusterversion version \
     -o jsonpath='{.status.desired.version}' 2>/dev/null || true)}
 if [ -z "${OCP_VERSION}" ]; then
-    echo "ERROR: could not discover the hub OpenShift version — set OCP_VERSION explicitly" >&2
+    echo "ERROR: could not discover the infra OpenShift version — set OCP_VERSION explicitly" >&2
     exit 1
 fi
 
-for _key in CLUSTER_NAME TENANT_NAMESPACE ASSISTED_NAMESPACE \
+for _key in NESTED_CLUSTER_NAME TENANT_NAMESPACE ASSISTED_NAMESPACE \
     SSH_AUTHORIZED_KEY INSTALL_TIMEOUT_MIN FINALIZING_TIMEOUT_MIN \
-    AGENTSERVICECONFIG_MANIFEST TENANT_CLUSTER_MANIFEST CSI_STORAGE_CLASS; do
+    AGENTSERVICECONFIG_MANIFEST NESTED_CLUSTER_MANIFEST CSI_STORAGE_CLASS; do
     if [ -z "${!_key}" ]; then
         echo "ERROR: ${_key} is not set and was not found in ${CONFIG_FILE}" >&2
         exit 1
@@ -112,7 +112,7 @@ ARTIFACT_DIR=${ARTIFACT_DIR:-/tmp/artifacts}
 mkdir -p "${ARTIFACT_DIR}"
 
 # ---------------------------------------------------------------------------
-# Discover hub cluster parameters
+# Discover infra cluster parameters
 # ---------------------------------------------------------------------------
 BASE_DOMAIN=${BASE_DOMAIN:-$(oc get ingresscontroller default -n openshift-ingress-operator \
     -o jsonpath='{.status.domain}' 2>/dev/null)}
@@ -182,7 +182,7 @@ function ensure_namespace_active() {
 #
 # The CAPI/CAPOA custom resources must already be part of the namespace
 # 'admin' role by the time this runs — that is the DEPLOYMENT's job, not
-# this script's: deploy-caas-standalone.sh aggregates the provider manager
+# this script's: deploy-caas-infra-standalone.sh aggregates the provider manager
 # roles as a standalone-only workaround, and the MCE integration is
 # expected to ship proper aggregate roles (as it already does for the
 # assisted-service resources). A fail-fast check below verifies it.
@@ -245,15 +245,15 @@ function setup_tenant_admin_user() {
     # Namespace-scoped admin for the user. The CAPI/CAPOA custom resources
     # must be part of the built-in 'admin' ClusterRole by now — the
     # deployment is responsible for that (standalone: manager-role
-    # aggregation in deploy-caas-standalone.sh; MCE: proper aggregate
+    # aggregation in deploy-caas-infra-standalone.sh; MCE: proper aggregate
     # roles, still a product gap). Verified right after switching to the
     # user kubeconfig, below.
     oc adm policy add-role-to-user admin "${TENANT_ADMIN_USER}" -n "${TENANT_NAMESPACE}"
 
     # kubeconfig for the user (CA taken from the current kubeconfig).
-    local api_url ca_file user_kubeconfig
+    local api_url ca_file infra_project_admin_kubeconfig
     api_url=$(oc whoami --show-server)
-    user_kubeconfig="${ARTIFACT_DIR}/tenant-admin-kubeconfig"
+    infra_project_admin_kubeconfig="${ARTIFACT_DIR}/infra-project-admin-kubeconfig"
     ca_file=$(mktemp)
     oc config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' \
         | base64 -d > "${ca_file}" 2>/dev/null || true
@@ -271,7 +271,7 @@ function setup_tenant_admin_user() {
     local attempt logged_in=false
     set +x
     for attempt in 1 2 3 4 5 6; do
-        if oc login --kubeconfig "${user_kubeconfig}" "${login_args[@]}" \
+        if oc login --kubeconfig "${infra_project_admin_kubeconfig}" "${login_args[@]}" \
             --username "${TENANT_ADMIN_USER}" --password "${TENANT_ADMIN_PASSWORD}"; then
             logged_in=true
             break
@@ -290,14 +290,14 @@ function setup_tenant_admin_user() {
     # is removed (prow artifacts, copying the file elsewhere, ...).
     if [ -s "${ca_file}" ]; then
         local cluster_name
-        cluster_name=$(oc config view --kubeconfig "${user_kubeconfig}" \
+        cluster_name=$(oc config view --kubeconfig "${infra_project_admin_kubeconfig}" \
             -o jsonpath='{.clusters[0].name}')
-        oc config --kubeconfig "${user_kubeconfig}" set-cluster "${cluster_name}" \
+        oc config --kubeconfig "${infra_project_admin_kubeconfig}" set-cluster "${cluster_name}" \
             --server "${api_url}" \
             --certificate-authority "${ca_file}" --embed-certs=true
     fi
     rm -f "${ca_file}"
-    oc --kubeconfig "${user_kubeconfig}" whoami
+    oc --kubeconfig "${infra_project_admin_kubeconfig}" whoami
 
     set +x
     echo "Project-admin credentials (also in ${ARTIFACT_DIR}/tenant-admin-credentials.txt):"
@@ -309,8 +309,8 @@ function setup_tenant_admin_user() {
     set -x
 
     # From here on, everything runs as the project-admin user.
-    echo "Switching KUBECONFIG to the project-admin user: ${user_kubeconfig}"
-    export KUBECONFIG="${user_kubeconfig}"
+    echo "Switching KUBECONFIG to the infra project-admin user: ${infra_project_admin_kubeconfig}"
+    export KUBECONFIG="${infra_project_admin_kubeconfig}"
 
     # Fail fast if the deployment did not make the CAPI resources available
     # to namespace admins (otherwise the manifest apply fails later with a
@@ -319,7 +319,7 @@ function setup_tenant_admin_user() {
         echo "ERROR: ${TENANT_ADMIN_USER} cannot list clusters.cluster.x-k8s.io:" >&2
         echo "       the CAPI/CAPOA resources are not aggregated into the 'admin'" >&2
         echo "       role. The DEPLOYMENT must provide that:" >&2
-        echo "         - standalone: deploy-caas-standalone.sh aggregates the manager roles" >&2
+        echo "         - standalone: deploy-caas-infra-standalone.sh aggregates the manager roles" >&2
         echo "         - MCE: proper aggregate roles (product gap, pending upstream)" >&2
         exit 1
     fi
@@ -336,10 +336,10 @@ function deploy_tenant_cluster() {
 
     ensure_namespace_active
 
-    export CLUSTER_NAME TENANT_NAMESPACE OCP_VERSION OCP_MAJOR_MINOR BASE_DOMAIN \
+    export NESTED_CLUSTER_NAME TENANT_NAMESPACE OCP_VERSION OCP_MAJOR_MINOR BASE_DOMAIN \
            STORAGE_CLASS CSI_STORAGE_CLASS SSH_AUTHORIZED_KEY PULL_SECRET_B64 INFRA_KUBECONFIG_B64
 
-    oc apply -f <(envsubst < "${REPO_DIR}/${TENANT_CLUSTER_MANIFEST}")
+    oc apply -f <(envsubst < "${REPO_DIR}/${NESTED_CLUSTER_MANIFEST}")
 }
 
 # ---------------------------------------------------------------------------
@@ -359,7 +359,7 @@ function machines_running() {
 
 # Dumps the Machine -> KubevirtMachine -> VMI chain so a stuck wait shows
 # exactly which link broke: Machine -> KubevirtMachine -> VMI/pod on the
-# hub -> VM -> node in the tenant.
+# infra cluster -> VM -> node in the nested cluster.
 function machines_status() {
     echo "machines:"
     oc get machines.cluster.x-k8s.io -n "${TENANT_NAMESPACE}" \
@@ -383,7 +383,7 @@ function wait_for_installation() {
 
     while true; do
         local state
-        state=$(oc get agentclusterinstall "${CLUSTER_NAME}" \
+        state=$(oc get agentclusterinstall "${NESTED_CLUSTER_NAME}" \
             -n "${TENANT_NAMESPACE}" \
             -o jsonpath='{.status.debugInfo.state}' 2>/dev/null || echo "")
 
@@ -406,7 +406,7 @@ function wait_for_installation() {
 
         if [[ "${state}" == "error" ]]; then
             echo "ERROR: Installation failed"
-            oc get agentclusterinstall "${CLUSTER_NAME}" \
+            oc get agentclusterinstall "${NESTED_CLUSTER_NAME}" \
                 -n "${TENANT_NAMESPACE}" \
                 -o jsonpath='{.status.debugInfo.stateInfo}' 2>/dev/null || true
             return 1
@@ -424,17 +424,17 @@ function wait_for_installation() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 4: extract tenant kubeconfig
+# Step 4: extract nested-cluster kubeconfig
 # ---------------------------------------------------------------------------
-function get_tenant_kubeconfig() {
-    local kubeconfig_path="${ARTIFACT_DIR}/tenant-kubeconfig"
+function get_nested_cluster_kubeconfig() {
+    local kubeconfig_path="${ARTIFACT_DIR}/nested-cluster-kubeconfig"
 
     # The CAPI kubeconfig (key "value", maintained by the control plane
     # provider) authenticates as system:admin and carries the correct Route
     # endpoint on port 443. The ACI-generated admin-kubeconfig instead
-    # points to the apiserver port 6443, which the hub router does not
-    # serve, making it unusable from outside the hub.
-    oc get secret "${CLUSTER_NAME}-kubeconfig" \
+    # points to the apiserver port 6443, which the infra router does not
+    # serve, making it unusable from outside the infra cluster.
+    oc get secret "${NESTED_CLUSTER_NAME}-kubeconfig" \
         -n "${TENANT_NAMESPACE}" \
         -o jsonpath='{.data.value}' \
         | base64 -d > "${kubeconfig_path}"
@@ -455,14 +455,17 @@ function smoke_check_tenant() {
 # Main
 # ---------------------------------------------------------------------------
 echo "=== CAAS tenant cluster deployment ==="
-echo "Cluster: ${CLUSTER_NAME} | OCP: ${OCP_VERSION} | Namespace: ${TENANT_NAMESPACE}"
+echo "Cluster: ${NESTED_CLUSTER_NAME} | OCP: ${OCP_VERSION} | Namespace: ${TENANT_NAMESPACE}"
 
 ensure_assisted_service
 setup_tenant_admin_user
 deploy_tenant_cluster
 wait_for_installation
-TENANT_KUBECONFIG=$(get_tenant_kubeconfig)
-smoke_check_tenant "${TENANT_KUBECONFIG}"
+NESTED_CLUSTER_KUBECONFIG=$(get_nested_cluster_kubeconfig)
+smoke_check_tenant "${NESTED_CLUSTER_KUBECONFIG}"
 
-echo "Tenant kubeconfig: ${TENANT_KUBECONFIG}"
+if [ -n "${TENANT_ADMIN_USER}" ]; then
+    echo "Infra project-admin kubeconfig: ${ARTIFACT_DIR}/infra-project-admin-kubeconfig"
+fi
+echo "Nested-cluster kubeconfig: ${NESTED_CLUSTER_KUBECONFIG}"
 echo "=== CAAS tenant cluster ready ==="
