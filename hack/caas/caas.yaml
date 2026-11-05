@@ -101,6 +101,12 @@ WORKERS_MANIFEST: "manifests/caas/nested-cluster-workers.yaml"
 # storageclass created alongside OpenShift Virtualization.
 CSI_STORAGE_CLASS: "ocs-storagecluster-ceph-rbd-virtualization"
 
+# Persistent storage for the nested cluster's internal image registry. This
+# StorageClass is provided by the KubeVirt CSI driver inside the tenant cluster.
+IMAGE_REGISTRY_STORAGE_CLASS: "kubevirt-csi"
+IMAGE_REGISTRY_STORAGE_SIZE: "20Gi"
+IMAGE_REGISTRY_PVC_NAME: "image-registry-storage"
+
 # Day-2 worker pool. The helper waits until this many worker Nodes are Ready
 # in the tenant before making the control-plane nodes unschedulable.
 DAY2_WORKERS_COUNT: "2"

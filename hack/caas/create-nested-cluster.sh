@@ -10,9 +10,10 @@
 #   3. wait for the AgentClusterInstall to reach "installed"
 #   4. extract the nested-cluster kubeconfig into ARTIFACT_DIR
 #   5. smoke-check the tenant cluster (oc get nodes)
+#   6. enable the tenant Image Registry on a KubeVirt CSI-backed PVC
 #
-# Nothing else: conformance runs and tenant deletion are driven by separate
-# Prow steps (see delete-nested-cluster.sh).
+# Conformance runs and tenant deletion are driven by separate Prow steps (see
+# delete-nested-cluster.sh).
 #
 # Required env vars:
 #   ARTIFACT_DIR        - directory for the tenant kubeconfig and logs (set by Prow)
@@ -31,7 +32,8 @@
 # environment variable:
 #   NESTED_CLUSTER_NAME, TENANT_NAMESPACE, ASSISTED_NAMESPACE, SSH_AUTHORIZED_KEY,
 #   INSTALL_TIMEOUT_MIN, FINALIZING_TIMEOUT_MIN, CSI_STORAGE_CLASS,
-#   TENANT_ADMIN_USER, TENANT_ADMIN_PASSWORD
+#   IMAGE_REGISTRY_STORAGE_CLASS, IMAGE_REGISTRY_STORAGE_SIZE,
+#   IMAGE_REGISTRY_PVC_NAME, TENANT_ADMIN_USER, TENANT_ADMIN_PASSWORD
 #
 # Project-admin mode (default, TENANT_ADMIN_USER != ""): the script creates
 # an htpasswd user, binds the built-in 'admin' role to it in the tenant
@@ -82,6 +84,9 @@ FINALIZING_TIMEOUT_MIN=$(read_config FINALIZING_TIMEOUT_MIN)
 AGENTSERVICECONFIG_MANIFEST=$(read_config AGENTSERVICECONFIG_MANIFEST)
 NESTED_CLUSTER_MANIFEST=$(read_config NESTED_CLUSTER_MANIFEST)
 CSI_STORAGE_CLASS=$(read_config CSI_STORAGE_CLASS)
+IMAGE_REGISTRY_STORAGE_CLASS=$(read_config IMAGE_REGISTRY_STORAGE_CLASS)
+IMAGE_REGISTRY_STORAGE_SIZE=$(read_config IMAGE_REGISTRY_STORAGE_SIZE)
+IMAGE_REGISTRY_PVC_NAME=$(read_config IMAGE_REGISTRY_PVC_NAME)
 TENANT_ADMIN_USER=$(read_config TENANT_ADMIN_USER)
 TENANT_ADMIN_PASSWORD=$(read_config TENANT_ADMIN_PASSWORD)
 
@@ -98,7 +103,8 @@ fi
 
 for _key in NESTED_CLUSTER_NAME TENANT_NAMESPACE ASSISTED_NAMESPACE \
     SSH_AUTHORIZED_KEY INSTALL_TIMEOUT_MIN FINALIZING_TIMEOUT_MIN \
-    AGENTSERVICECONFIG_MANIFEST NESTED_CLUSTER_MANIFEST CSI_STORAGE_CLASS; do
+    AGENTSERVICECONFIG_MANIFEST NESTED_CLUSTER_MANIFEST CSI_STORAGE_CLASS \
+    IMAGE_REGISTRY_STORAGE_CLASS IMAGE_REGISTRY_STORAGE_SIZE IMAGE_REGISTRY_PVC_NAME; do
     if [ -z "${!_key}" ]; then
         echo "ERROR: ${_key} is not set and was not found in ${CONFIG_FILE}" >&2
         exit 1
@@ -451,6 +457,55 @@ function smoke_check_tenant() {
     oc --kubeconfig "${tenant_kubeconfig}" get nodes
 }
 
+# Enable the internal registry with persistent storage. A ReadWriteOnce PVC
+# requires Recreate: RollingUpdate can briefly attach the volume to two pods.
+function enable_tenant_image_registry() {
+    local tenant_kubeconfig="${1}"
+    local registry_namespace="openshift-image-registry"
+    local tenant_oc=(oc --kubeconfig "${tenant_kubeconfig}")
+
+    echo "Configuring Image Registry with ${IMAGE_REGISTRY_STORAGE_CLASS} (${IMAGE_REGISTRY_STORAGE_SIZE})"
+    "${tenant_oc[@]}" get storageclass "${IMAGE_REGISTRY_STORAGE_CLASS}"
+    "${tenant_oc[@]}" apply -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ${IMAGE_REGISTRY_PVC_NAME}
+  namespace: ${registry_namespace}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ${IMAGE_REGISTRY_STORAGE_CLASS}
+  resources:
+    requests:
+      storage: ${IMAGE_REGISTRY_STORAGE_SIZE}
+EOF
+
+    "${tenant_oc[@]}" wait pvc "${IMAGE_REGISTRY_PVC_NAME}" \
+        -n "${registry_namespace}" \
+        --for=jsonpath='{.status.phase}'=Bound \
+        --timeout=10m
+
+    "${tenant_oc[@]}" patch configs.imageregistry.operator.openshift.io/cluster \
+        --type=merge \
+        -p "{\"spec\":{\"managementState\":\"Managed\",\"replicas\":1,\"rolloutStrategy\":\"Recreate\",\"storage\":{\"pvc\":{\"claim\":\"${IMAGE_REGISTRY_PVC_NAME}\"}}}}"
+
+    "${tenant_oc[@]}" wait deployment/image-registry \
+        -n "${registry_namespace}" \
+        --for=condition=Available \
+        --timeout=10m
+    "${tenant_oc[@]}" wait clusteroperator/image-registry \
+        --for=condition=Available \
+        --timeout=10m
+    "${tenant_oc[@]}" wait clusteroperator/image-registry \
+        --for=jsonpath='{.status.conditions[?(@.type==\"Progressing\")].status}'=False \
+        --timeout=10m
+    "${tenant_oc[@]}" wait clusteroperator/image-registry \
+        --for=jsonpath='{.status.conditions[?(@.type==\"Degraded\")].status}'=False \
+        --timeout=10m
+    "${tenant_oc[@]}" get clusteroperator image-registry
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -463,6 +518,7 @@ deploy_tenant_cluster
 wait_for_installation
 NESTED_CLUSTER_KUBECONFIG=$(get_nested_cluster_kubeconfig)
 smoke_check_tenant "${NESTED_CLUSTER_KUBECONFIG}"
+enable_tenant_image_registry "${NESTED_CLUSTER_KUBECONFIG}"
 
 if [ -n "${TENANT_ADMIN_USER}" ]; then
     echo "Infra project-admin kubeconfig: ${ARTIFACT_DIR}/infra-project-admin-kubeconfig"
