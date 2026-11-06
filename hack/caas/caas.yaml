@@ -101,6 +101,14 @@ WORKERS_MANIFEST: "manifests/caas/nested-cluster-workers.yaml"
 # storageclass created alongside OpenShift Virtualization.
 CSI_STORAGE_CLASS: "ocs-storagecluster-ceph-rbd-virtualization"
 
+# VolumeSnapshotClass on the infra cluster marked as default so class-less
+# tenant VolumeSnapshots resolve against it: the KubeVirt CSI driver creates
+# them without a class in the infra namespace whenever the tenant class
+# carries no infraSnapshotClassName (e.g. upstream test-driver.yaml
+# 'SnapshotClass: FromName'). Default-class selection is driver-aware, so
+# this coexists with the platform defaults (e.g. csi-azuredisk-vsc on Azure).
+CSI_SNAPSHOT_CLASS: "ocs-storagecluster-rbdplugin-snapclass"
+
 # Persistent storage for the nested cluster's internal image registry. This
 # StorageClass is provided by the KubeVirt CSI driver inside the tenant cluster.
 IMAGE_REGISTRY_STORAGE_CLASS: "kubevirt-csi"

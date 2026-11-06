@@ -32,8 +32,9 @@
 # environment variable:
 #   NESTED_CLUSTER_NAME, TENANT_NAMESPACE, ASSISTED_NAMESPACE, SSH_AUTHORIZED_KEY,
 #   INSTALL_TIMEOUT_MIN, FINALIZING_TIMEOUT_MIN, CSI_STORAGE_CLASS,
-#   IMAGE_REGISTRY_STORAGE_CLASS, IMAGE_REGISTRY_STORAGE_SIZE,
-#   IMAGE_REGISTRY_PVC_NAME, TENANT_ADMIN_USER, TENANT_ADMIN_PASSWORD
+#   CSI_SNAPSHOT_CLASS, IMAGE_REGISTRY_STORAGE_CLASS,
+#   IMAGE_REGISTRY_STORAGE_SIZE, IMAGE_REGISTRY_PVC_NAME, TENANT_ADMIN_USER,
+#   TENANT_ADMIN_PASSWORD
 #
 # Project-admin mode (default, TENANT_ADMIN_USER != ""): the script creates
 # an htpasswd user, binds the built-in 'admin' role to it in the tenant
@@ -84,6 +85,7 @@ FINALIZING_TIMEOUT_MIN=$(read_config FINALIZING_TIMEOUT_MIN)
 AGENTSERVICECONFIG_MANIFEST=$(read_config AGENTSERVICECONFIG_MANIFEST)
 NESTED_CLUSTER_MANIFEST=$(read_config NESTED_CLUSTER_MANIFEST)
 CSI_STORAGE_CLASS=$(read_config CSI_STORAGE_CLASS)
+CSI_SNAPSHOT_CLASS=$(read_config CSI_SNAPSHOT_CLASS)
 IMAGE_REGISTRY_STORAGE_CLASS=$(read_config IMAGE_REGISTRY_STORAGE_CLASS)
 IMAGE_REGISTRY_STORAGE_SIZE=$(read_config IMAGE_REGISTRY_STORAGE_SIZE)
 IMAGE_REGISTRY_PVC_NAME=$(read_config IMAGE_REGISTRY_PVC_NAME)
@@ -104,7 +106,7 @@ fi
 for _key in NESTED_CLUSTER_NAME TENANT_NAMESPACE ASSISTED_NAMESPACE \
     SSH_AUTHORIZED_KEY INSTALL_TIMEOUT_MIN FINALIZING_TIMEOUT_MIN \
     AGENTSERVICECONFIG_MANIFEST NESTED_CLUSTER_MANIFEST CSI_STORAGE_CLASS \
-    IMAGE_REGISTRY_STORAGE_CLASS IMAGE_REGISTRY_STORAGE_SIZE IMAGE_REGISTRY_PVC_NAME; do
+    CSI_SNAPSHOT_CLASS IMAGE_REGISTRY_STORAGE_CLASS IMAGE_REGISTRY_STORAGE_SIZE IMAGE_REGISTRY_PVC_NAME; do
     if [ -z "${!_key}" ]; then
         echo "ERROR: ${_key} is not set and was not found in ${CONFIG_FILE}" >&2
         exit 1
@@ -520,6 +522,13 @@ echo "=== CAAS tenant cluster deployment ==="
 echo "Cluster: ${NESTED_CLUSTER_NAME} | OCP: ${OCP_VERSION} | Namespace: ${TENANT_NAMESPACE}"
 
 ensure_assisted_service
+
+# Class-less tenant VolumeSnapshots (e.g. upstream test-driver.yaml 'FromName')
+# are created by the kubevirt-csi driver in the infra cluster and resolved via
+# the driver-matching default VSC there; OCP never marks the ODF one as default.
+oc annotate volumesnapshotclass "${CSI_SNAPSHOT_CLASS}" \
+    snapshot.storage.kubernetes.io/is-default-class=true --overwrite
+
 setup_tenant_admin_user
 deploy_tenant_cluster
 wait_for_installation
