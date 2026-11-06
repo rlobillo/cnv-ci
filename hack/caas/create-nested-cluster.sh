@@ -490,6 +490,13 @@ EOF
         --type=merge \
         -p "{\"spec\":{\"managementState\":\"Managed\",\"replicas\":1,\"rolloutStrategy\":\"Recreate\",\"storage\":{\"pvc\":{\"claim\":\"${IMAGE_REGISTRY_PVC_NAME}\"}}}}"
 
+    # The operator creates the deployment asynchronously after the config patch.
+    # Wait for the resource to exist before asking oc wait for Available.
+    local deployment_probe
+    printf -v deployment_probe '%q ' \
+        "${tenant_oc[@]}" get deployment/image-registry -n "${registry_namespace}"
+    "${REPO_DIR}/hack/retry.sh" 120 5 "${deployment_probe}"
+
     "${tenant_oc[@]}" wait deployment/image-registry \
         -n "${registry_namespace}" \
         --for=condition=Available \
