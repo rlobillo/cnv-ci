@@ -101,6 +101,7 @@ CAPOA_BOOTSTRAP_MANIFEST=$(read_config CAPOA_BOOTSTRAP_MANIFEST)
 AGENTSERVICECONFIG_MANIFEST=$(read_config AGENTSERVICECONFIG_MANIFEST)
 CAPOA_CTRL_IMAGE=$(read_config CAPOA_CTRL_IMAGE)
 CAPOA_BOOT_IMAGE=$(read_config CAPOA_BOOT_IMAGE)
+TENANT_ADMIN_USER=$(read_config TENANT_ADMIN_USER)
 
 for _key in CAPI_VERSION CAPK_VERSION CERT_MANAGER_VERSION ASSISTED_SERVICE_TAG \
     ASSISTED_SERVICE_CRD_PATHS ASSISTED_SERVICE_KUSTOMIZE_PATH \
@@ -315,6 +316,29 @@ function aggregate_manager_roles() {
 }
 
 # ---------------------------------------------------------------------------
+# Step 7: grant the tenant project-admin the PV reads the CSI driver needs
+# ---------------------------------------------------------------------------
+# CNV-100656 (second blocker): in project-admin mode the kubevirt-csi driver
+# talks to the infra cluster with the tenant-admin kubeconfig (CAPOA copies
+# it into kubevirt-infra-credentials), and its resize-completion check
+# (EnsureControllerResize) reads the cluster-scoped PV to detect that the
+# infra-side controller resize finished. PVs are cluster-scoped, so the
+# namespace-scoped project-admin cannot read them and volume expansion
+# fails with 'User "tenant-admin" cannot get resource "persistentvolumes"
+# ... at the cluster scope'. The built-in system:volume-scheduler
+# ClusterRole covers that read (plus some more: get/list/patch/update/watch
+# on PVs and PVCs) — same acceptable over-grant on disposable QE infra
+# clusters as step 5. Skipped in legacy cluster-admin mode, where the
+# deployer kubeconfig can already read PVs.
+function grant_pv_reads_to_tenant_admin() {
+    if [ -z "${TENANT_ADMIN_USER}" ]; then
+        echo "TENANT_ADMIN_USER is empty (legacy cluster-admin mode) — skipping volume-scheduler grant"
+        return 0
+    fi
+    oc adm policy add-cluster-role-to-user system:volume-scheduler "${TENANT_ADMIN_USER}"
+}
+
+# ---------------------------------------------------------------------------
 # Step 6: ensure the KubevirtMachine CRD has the v1beta2 status field
 # ---------------------------------------------------------------------------
 # CAPK v0.11.x declares the v1beta2 contract in its metadata.yaml but ships
@@ -367,5 +391,6 @@ patch_kubevirtmachine_crd
 install_capoa
 install_assisted_service
 aggregate_manager_roles
+grant_pv_reads_to_tenant_admin
 
 echo "=== CAPOA+KubeVirt standalone deployment complete ==="
