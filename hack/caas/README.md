@@ -29,6 +29,7 @@ The manifests are in `manifests/caas/`: `nested-cluster.yaml`,
 | `deploy-caas-infra-mce.sh` | **Phase 2** (placeholder, not implemented yet) — will install the same infrastructure managed by MCE |
 | `create-nested-cluster.sh` | Create the nested cluster on the infra cluster and wait for installation. In project-admin mode, writes `infra-project-admin-kubeconfig`; after installation, extracts the nested cluster's cluster-admin kubeconfig as `nested-cluster-kubeconfig` and smoke-checks it (`oc get nodes`) |
 | `add-workers-to-nested-cluster.sh` | Apply the day-2 worker pool with the infra project-admin kubeconfig, wait until the requested nested-cluster worker Nodes are `Ready`, then set `Scheduler.spec.mastersSchedulable=false` so workloads stop scheduling on masters |
+| `run-kubevirt-csi-tests.sh` | Run the upstream kubevirt/csi-driver storage e2e suite against the nested cluster, fetching `hack/test-driver.yaml` verbatim from kubevirt/csi-driver (only the tenant StorageClass name is patched); applies upstream's ginkgo skips, runs the OCP LUNStressTest (`manifests/caas/kubevirt-csi-ocp.yaml`) and a second RWX pass with `test-driver-rwx.yaml` |
 | `delete-nested-cluster.sh` | Delete the nested cluster by removing its infra project namespace and waiting for the Kubernetes garbage collection to complete; verifies that its PVs were reclaimed — exits non-zero if anything is left behind. Never intervenes in the teardown |
 | `undeploy-caas-infra-standalone.sh` | **Phase 1** — remove everything `deploy-caas-infra-standalone.sh` installed (providers, standalone assisted-service, cert-manager). Run `delete-nested-cluster.sh` first |
 
@@ -46,6 +47,7 @@ export NESTED_CLUSTER_KUBECONFIG="${ARTIFACT_DIR}/nested-cluster-kubeconfig"
 
 # validate the nested cluster, e.g.
 oc --kubeconfig "$ARTIFACT_DIR/nested-cluster-kubeconfig" get nodes
+./hack/caas/run-kubevirt-csi-tests.sh  # upstream kubevirt-csi storage e2e suite
 
 ./hack/caas/delete-nested-cluster.sh
 ```
