@@ -2,9 +2,10 @@
 # Add the day-2 KubeVirt worker pool to an installed tenant cluster.
 # The infra project-admin kubeconfig applies CAPI resources; the nested-cluster
 # admin kubeconfig checks Node readiness and updates the nested-cluster
-# Scheduler after all workers have joined. Masters remain schedulable if the
-# worker readiness gate times out. The nested-cluster kubeconfig must be
-# cluster-admin because Scheduler is cluster-scoped.
+# Scheduler after all workers have joined, then smoke-checks ingress from
+# outside the nested cluster. Masters remain schedulable if the worker
+# readiness gate times out. The nested-cluster kubeconfig must be cluster-admin
+# because Scheduler is cluster-scoped.
 
 set -euo pipefail
 
@@ -35,7 +36,7 @@ NESTED_CLUSTER_KUBECONFIG=${NESTED_CLUSTER_KUBECONFIG:-${ARTIFACT_DIR}/nested-cl
 WORKERS_MANIFEST="${REPO_DIR}/${WORKERS_MANIFEST}"
 POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-30}
 
-for command in oc envsubst jq; do
+for command in oc envsubst jq curl; do
     if ! command -v "${command}" >/dev/null 2>&1; then
         echo "ERROR: required command '${command}' was not found" >&2
         exit 1
@@ -137,3 +138,21 @@ fi
 
 echo "Day-2 workers are Ready; tenant control-plane scheduling is disabled."
 oc --kubeconfig="${NESTED_CLUSTER_KUBECONFIG}" get nodes -o wide
+
+echo "Smoke-checking tenant ingress after adding day-2 workers"
+worker_smoke_namespace="test-workers"
+tenant_oc=(oc --kubeconfig="${NESTED_CLUSTER_KUBECONFIG}")
+"${tenant_oc[@]}" create namespace "${worker_smoke_namespace}" --dry-run=client -o yaml \
+    | "${tenant_oc[@]}" apply -f -
+"${tenant_oc[@]}" -n "${worker_smoke_namespace}" \
+    new-app nginxinc/nginx-unprivileged:stable-alpine --name=nginx
+"${tenant_oc[@]}" -n "${worker_smoke_namespace}" \
+    rollout status deployment/nginx --timeout=5m
+"${tenant_oc[@]}" -n "${worker_smoke_namespace}" \
+    expose svc/nginx --name=nginx-test
+route_host=$("${tenant_oc[@]}" -n "${worker_smoke_namespace}" \
+    get route nginx-test -o jsonpath='{.spec.host}')
+echo "Checking nginx route after adding workers: http://${route_host}"
+curl --fail --show-error --silent --retry 12 --retry-delay 5 --retry-all-errors \
+    --max-time 10 \
+    "http://${route_host}"

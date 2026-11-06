@@ -10,7 +10,8 @@
 #   3. wait for the AgentClusterInstall to reach "installed"
 #   4. extract the nested-cluster kubeconfig into ARTIFACT_DIR
 #   5. smoke-check the tenant cluster (oc get nodes)
-#   6. enable the tenant Image Registry on a KubeVirt CSI-backed PVC
+#   6. smoke-check a routed workload (nginx + Route, curled from outside)
+#   7. enable the tenant Image Registry on a KubeVirt CSI-backed PVC
 #
 # Conformance runs and tenant deletion are driven by separate Prow steps (see
 # delete-nested-cluster.sh).
@@ -455,8 +456,22 @@ function get_nested_cluster_kubeconfig() {
 # ---------------------------------------------------------------------------
 function smoke_check_tenant() {
     local tenant_kubeconfig="${1}"
+    local route_host
+    local tenant_oc=(oc --kubeconfig "${tenant_kubeconfig}")
     echo "Smoke-checking tenant cluster via ${tenant_kubeconfig}"
-    oc --kubeconfig "${tenant_kubeconfig}" get nodes
+    "${tenant_oc[@]}" get nodes
+
+    echo "Smoke-checking tenant ingress with nginx"
+    "${tenant_oc[@]}" create namespace test --dry-run=client -o yaml | "${tenant_oc[@]}" apply -f -
+    "${tenant_oc[@]}" -n test new-app nginxinc/nginx-unprivileged:stable-alpine --name=nginx
+    "${tenant_oc[@]}" -n test rollout status deployment/nginx --timeout=5m
+    "${tenant_oc[@]}" -n test expose svc/nginx \
+        --name=nginx-test
+    route_host=$("${tenant_oc[@]}" -n test get route nginx-test -o jsonpath='{.spec.host}')
+    echo "Checking nginx route: http://${route_host}"
+    curl --fail --show-error --silent --retry 12 --retry-delay 5 --retry-all-errors \
+        --max-time 10 \
+        "http://${route_host}"
 }
 
 # Enable the internal registry with persistent storage. A ReadWriteOnce PVC
