@@ -1,0 +1,26 @@
+# CAAS AgentServiceConfig deployed by hack/caas/deploy-caas-infra-standalone.sh.
+# Triggers the assisted-service deployment on the hub cluster.
+#
+# enable-image-service: "false" — CAPOA handles OS image delivery for
+# KubeVirt tenant clusters (golden PVCs / ClusterImageSets), so the image
+# service is not needed.
+apiVersion: agent-install.openshift.io/v1beta1
+kind: AgentServiceConfig
+metadata:
+  name: agent
+  annotations:
+    agent-install.openshift.io/enable-image-service: "false"
+spec:
+  databaseStorage:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: 10Gi
+  filesystemStorage:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: 10Gi
+  osImages: []

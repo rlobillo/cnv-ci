@@ -1,0 +1,12 @@
+# OpenShift-specific CSI test manifest for the kubevirt-csi driver,
+# consumed through TEST_OCP_CSI_DRIVER_FILES by
+# hack/caas/run-kubevirt-csi-tests.sh.
+#
+# LUNStressTest is reduced from the 260-pod default: every volume is a
+# DataVolume created in the infra cluster and hot-plugged into a tenant VM,
+# so provisioning and attach are orders of magnitude slower than attaching a
+# real cloud disk.
+Driver: csi.kubevirt.io
+LUNStressTest:
+  PodsTotal: 40
+  Timeout: "90m"
