@@ -136,6 +136,21 @@ fi
 echo "Day-2 workers are Ready; tenant control-plane scheduling is disabled."
 oc --kubeconfig="${NESTED_CLUSTER_KUBECONFIG}" get nodes -o wide
 
+# ---------------------------------------------------------------------------
+# Move the tenant router off the control-plane Nodes (CNV-100093)
+# ---------------------------------------------------------------------------
+# The compact install scheduled the router replicas on the control-plane
+# Nodes, and mastersSchedulable=false does not evict them (NoSchedule only
+# gates NEW scheduling): recreate the deployment so the replicas land on the
+# day-2 workers, where the default IngressController places them.
+# Reproduces https://redhat.atlassian.net/browse/CNV-100093, so until it is fixed,
+# below two commands are commented:
+#
+# oc --kubeconfig="${NESTED_CLUSTER_KUBECONFIG}" -n openshift-ingress \
+#     rollout restart deployment/router-default
+# oc --kubeconfig="${NESTED_CLUSTER_KUBECONFIG}" -n openshift-ingress \
+#     rollout status deployment/router-default --timeout=5m
+
 echo "Smoke-checking tenant ingress after adding day-2 workers"
 worker_smoke_namespace="test-workers"
 tenant_oc=(oc --kubeconfig="${NESTED_CLUSTER_KUBECONFIG}")
