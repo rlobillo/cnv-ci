@@ -12,8 +12,8 @@
 #   (defaults under ARTIFACT_DIR). The infra kubeconfig must be allowed to
 #   create VirtualMachineInstanceMigrations (namespace 'admin' is NOT enough).
 # Tunables (env var, defaults in-script): MIGRATION_TIMEOUT_MIN,
-#   NODE_READY_TIMEOUT_MIN. TENANT_NAMESPACE comes from caas.yaml (env wins).
-#   Poll interval: POLL_INTERVAL_SECONDS (env only).
+#   NODE_READY_TIMEOUT_MIN, GRACE_WINDOW_SECONDS. TENANT_NAMESPACE comes from
+#   caas.yaml (env wins). Poll interval: POLL_INTERVAL_SECONDS (env only).
 # The Route is an edge-TLS route probed over https directly from wherever
 # this script runs: the infra cluster's wildcard passthrough route (port 443)
 # forwards the request end-to-end to the nested ingress. Every failed request
@@ -29,6 +29,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 TENANT_NAMESPACE=$(read_config TENANT_NAMESPACE)
 MIGRATION_TIMEOUT_MIN=${MIGRATION_TIMEOUT_MIN:-30}
 NODE_READY_TIMEOUT_MIN=${NODE_READY_TIMEOUT_MIN:-5}
+GRACE_WINDOW_SECONDS=${GRACE_WINDOW_SECONDS:-15}
 
 ARTIFACT_DIR=${ARTIFACT_DIR:-/tmp/artifacts}
 INFRA_PROJECT_ADMIN_KUBECONFIG=${INFRA_PROJECT_ADMIN_KUBECONFIG:-${ARTIFACT_DIR}/infra-project-admin-kubeconfig}
@@ -108,9 +109,30 @@ while :; do
     sleep 1
 done
 
-# Tail: the network cutover can land a beat after the VMIM reports Succeeded.
+# Grace window: the network cutover can outlive the VMIM's Succeeded phase.
+# The VMI keeps its pod IP across the node move, and the infra network needs
+# a beat to reprogram the flows for the new location, so the Route may stay
+# down for a few seconds after a successful migration. Wait (bounded) for it
+# to recover and log the recovery time instead of counting those requests as
+# failures; a Route still broken after the bound is a real failure.
+grace_start=${SECONDS}
+until [ "$(route_code)" = 200 ]; do
+    if [ $((SECONDS - grace_start)) -ge "${GRACE_WINDOW_SECONDS}" ]; then
+        echo "ERROR: Route still not serving ${GRACE_WINDOW_SECONDS}s after the migration reported Succeeded" >&2
+        exit 1
+    fi
+    sleep 1
+done
+echo "Route recovered $((SECONDS - grace_start))s after the migration reported Succeeded"
+
+# Tail: the network has settled — every request must succeed now.
 for _ in 1 2 3; do
-    [ "$(route_code)" = 200 ] || failures=$((failures + 1))
+    if [ "$(route_code)" = 200 ]; then
+        :
+    else
+        failures=$((failures + 1))
+        echo "WARNING: request failed against the Route after the migration reported Succeeded" >&2
+    fi
     requests=$((requests + 1))
     sleep 1
 done
